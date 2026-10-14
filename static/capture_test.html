@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>capture golden test</title></head>
+<body>
+<script src="/static/model.js"></script>
+<script src="/static/capture.js"></script>
+<script src="/static/_testdata.js"></script>
+<script>
+window.__DONE = false;
+window.__RESULTS = [];
+window.__REVIEW = {};
+
+function loadImage(src) {
+  return new Promise((res, rej) => {
+    const i = new Image();
+    i.onload = () => res(i);
+    i.onerror = rej;
+    i.src = src;
+  });
+}
+
+// pixel stats: RGB compared where either image is non-transparent
+function compare(capturedCanvas, goldenImg, widgets) {
+  const W = capturedCanvas.width, H = capturedCanvas.height;
+  const c1 = document.createElement("canvas");
+  c1.width = W; c1.height = H;
+  const x1 = c1.getContext("2d");
+  x1.drawImage(capturedCanvas, 0, 0);
+  const c2 = document.createElement("canvas");
+  c2.width = W; c2.height = H;
+  const x2 = c2.getContext("2d");
+  x2.drawImage(goldenImg, 0, 0);
+  const d1 = x1.getImageData(0, 0, W, H).data;
+  const d2 = x2.getImageData(0, 0, W, H).data;
+
+  let se = 0, n = 0, sumAbs = 0;
+  for (let i = 0; i < d1.length; i += 4) {
+    if (d1[i + 3] > 10 || d2[i + 3] > 10) {
+      for (let k = 0; k < 3; k++) {
+        const d = d1[i + k] - d2[i + k];
+        se += d * d; sumAbs += Math.abs(d); n++;
+      }
+    }
+  }
+  const mse = se / (n || 1), mad = sumAbs / (n || 1);
+  const psnr = mse <= 1e-9 ? 99 : 10 * Math.log10(255 * 255 / mse);
+
+  // perceptual: composite over black, average 4x4 blocks, MAD between
+  // blocks. Kills sub-pixel antialiasing noise; keeps real differences.
+  let bsum = 0, bn = 0;
+  const BS = 4;
+  for (let by = 0; by < H; by += BS) {
+    for (let bx = 0; bx < W; bx += BS) {
+      let a1 = [0, 0, 0], a2 = [0, 0, 0], cnt = 0;
+      for (let yy = by; yy < Math.min(by + BS, H); yy++)
+        for (let xx = bx; xx < Math.min(bx + BS, W); xx++) {
+          const i = (yy * W + xx) * 4;
+          for (let k = 0; k < 3; k++) {
+            a1[k] += d1[i + k] * (d1[i + 3] / 255);
+            a2[k] += d2[i + k] * (d2[i + 3] / 255);
+          }
+          cnt++;
+        }
+      for (let k = 0; k < 3; k++) {
+        bsum += Math.abs(a1[k] / cnt - a2[k] / cnt);
+        bn++;
+      }
+    }
+  }
+  const blockMad = bsum / (bn || 1);
+
+  const regions = widgets.map(w => {
+    const x0 = Math.max(0, w.x | 0), y0 = Math.max(0, w.y | 0);
+    const x1b = Math.min(W, x0 + (w.w | 0)), y1b = Math.min(H, y0 + (w.h | 0));
+    let rse = 0, rn = 0;
+    for (let yy = y0; yy < y1b; yy += 2) {
+      for (let xx = x0; xx < x1b; xx += 2) {
+        const i = (yy * W + xx) * 4;
+        if (d1[i + 3] > 10 || d2[i + 3] > 10) {
+          for (let k = 0; k < 3; k++) {
+            const d = d1[i + k] - d2[i + k];
+            rse += d * d; rn++;
+          }
+        }
+      }
+    }
+    const rmse = rse / (rn || 1);
+    return {
+      id: w.id, type: w.type, style: w.style || "",
+      mad: Math.round(Math.sqrt(rmse) * 10) / 10,
+    };
+  });
+  return { psnr: Math.round(psnr * 10) / 10, mad: Math.round(mad * 10) / 10,
+           blockMad: Math.round(blockMad * 100) / 100, regions };
+}
+
+function buildReview(capturedCanvas, goldenImg, W, H) {
+  const scale = 640 / H;
+  const w = Math.round(W * scale), h = 640;
+  const cv = document.createElement("canvas");
+  cv.width = w * 3 + 20; cv.height = h;
+  const c = cv.getContext("2d");
+  c.fillStyle = "#222"; c.fillRect(0, 0, cv.width, cv.height);
+  c.drawImage(goldenImg, 0, 0, w, h);
+  c.drawImage(capturedCanvas, w + 10, 0, w, h);
+  const diff = document.createElement("canvas");
+  diff.width = W; diff.height = H;
+  const dc = diff.getContext("2d");
+  dc.drawImage(capturedCanvas, 0, 0);
+  const d = dc.getImageData(0, 0, W, H);
+  const g = document.createElement("canvas").getContext("2d");
+  g.drawImage(goldenImg, 0, 0);
+  const dg = g.getImageData(0, 0, W, H).data;
+  for (let i = 0; i < d.data.length; i += 4) {
+    const dd = Math.min(255, (Math.abs(d.data[i] - dg[i]) +
+      Math.abs(d.data[i + 1] - dg[i + 1]) + Math.abs(d.data[i + 2] - dg[i + 2])) * 2);
+    d.data[i] = d.data[i + 1] = d.data[i + 2] = dd;
+    d.data[i + 3] = 255;
+  }
+  dc.putImageData(d, 0, 0);
+  c.drawImage(diff, 2 * (w + 10), 0, w, h);
+  return cv.toDataURL("image/jpeg", 0.72);
+}
+
+(async () => {
+  try {
+    for (let ci = 0; ci < TESTDATA.cases.length; ci++) {
+      const cs = TESTDATA.cases[ci];
+      const name = `${cs.project}_t${cs.t.toFixed(2)}.png`;
+      const captured = await Capture.captureFrame(cs.telemetry, cs.widgets, cs.t, cs.w, cs.h);
+      const goldenImg = await loadImage("/static/_golden/" + name);
+      const stats = compare(captured, goldenImg, cs.widgets);
+      stats.case = name;
+      window.__RESULTS.push(stats);
+      window.__REVIEW[name] = buildReview(captured, goldenImg, cs.w, cs.h);
+    }
+    window.__DONE = true;
+  } catch (e) {
+    window.__ERROR = String(e && e.stack || e);
+    window.__DONE = true;
+  }
+})();
+</script>
+</body>
+</html>

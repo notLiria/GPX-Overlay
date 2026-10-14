@@ -1,0 +1,14 @@
+# user uploads and rendered outputs (1.1 GB+, personal data)
+projects/
+
+# auth token (removed feature, never commit)
+.token
+
+# python
+__pycache__/
+*.pyc
+*.pyo
+
+# editor / OS junk
+.DS_Store
+*.swp

@@ -1,0 +1,60 @@
+{
+ "cases": [
+  {
+   "project": "9ce4e775fa81",
+   "w": 1080,
+   "h": 1920,
+   "t": 1.0,
+   "file": "9ce4e775fa81_t1.00.png",
+   "sha256": "89650125cc2daa30bc7df072c52ad1b3b85bf24d781c38fbcaa0b225fa81edb3"
+  },
+  {
+   "project": "9ce4e775fa81",
+   "w": 1080,
+   "h": 1920,
+   "t": 3.75,
+   "file": "9ce4e775fa81_t3.75.png",
+   "sha256": "ad1d72e9353d21a760bf8b080533b3b4e866bb762958f09becc8e7536ebb888b"
+  },
+  {
+   "project": "9ce4e775fa81",
+   "w": 1080,
+   "h": 1920,
+   "t": 6.5,
+   "file": "9ce4e775fa81_t6.50.png",
+   "sha256": "0a394e9d1bf1b0f7ae37a987e5a68419d0d91b1e4baaadab5d3451fcceb70804"
+  },
+  {
+   "project": "8196117eec07",
+   "w": 1080,
+   "h": 1920,
+   "t": 1.0,
+   "file": "8196117eec07_t1.00.png",
+   "sha256": "89650125cc2daa30bc7df072c52ad1b3b85bf24d781c38fbcaa0b225fa81edb3"
+  },
+  {
+   "project": "8196117eec07",
+   "w": 1080,
+   "h": 1920,
+   "t": 3.75,
+   "file": "8196117eec07_t3.75.png",
+   "sha256": "ad1d72e9353d21a760bf8b080533b3b4e866bb762958f09becc8e7536ebb888b"
+  },
+  {
+   "project": "0b47ca38a6da",
+   "w": 720,
+   "h": 1280,
+   "t": 2.0,
+   "file": "0b47ca38a6da_t2.00.png",
+   "sha256": "64dc8491f6e4204e16bba58ae902feb4e8b7ff3c45dd2e08c4a0d9d101de401e"
+  },
+  {
+   "project": "0b47ca38a6da",
+   "w": 720,
+   "h": 1280,
+   "t": 5.0,
+   "file": "0b47ca38a6da_t5.00.png",
+   "sha256": "a265adb4fae637bd374d8aa39fb0f6ed7a44472a87d2fd7ca4b5a9a87b78fb69"
+  }
+ ]
+}
