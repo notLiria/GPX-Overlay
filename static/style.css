@@ -312,3 +312,12 @@ body { padding-bottom: env(safe-area-inset-bottom); }
 @media (pointer: coarse) {
   .action-row select, .action-row button { flex: 1 1 auto; }
 }
+
+/* Touch constraints cover EVERYTHING inside the stage (children had
+   touch-action:auto, which iOS can resolve against the gesture) */
+#stage, #stage * {
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}

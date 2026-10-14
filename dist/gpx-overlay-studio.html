@@ -309,6 +309,15 @@ body { padding-bottom: env(safe-area-inset-bottom); }
   .action-row select, .action-row button { flex: 1 1 auto; }
 }
 
+/* Touch constraints cover EVERYTHING inside the stage (children had
+   touch-action:auto, which iOS can resolve against the gesture) */
+#stage, #stage * {
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+
 </style>
 </head>
 <body>
@@ -13236,9 +13245,14 @@ function renderStage() {
       rz.style.top = (w.y + w.h) * scale - 6 + "px";
       if (!w.display) rz.style.display = "none";
       cv.addEventListener("pointerdown", (e) => {
+        if (e.pointerType === "touch") return;   // touch uses touchstart below
         if (inResizeZone(e, cv)) startResize(e, w, cv);
         else startDrag(e, w, cv);
       });
+      cv.addEventListener("touchstart", (e) => {
+        if (inResizeZone(e, cv)) startResize(e, w, cv);
+        else startDrag(e, w, cv);
+      }, { passive: false });
       stage.appendChild(rz);
       continue;
     }
@@ -13258,13 +13272,18 @@ function renderStage() {
     const rz = document.createElement("div");
     rz.className = "resize";
     box.appendChild(rz);
-    box.addEventListener("pointerdown", (e) => {
-      // Gesture routing: the bottom-right corner zone resizes, everything
-      // else drags. A separate hit target fails on small widgets (its
-      // 44px touch area swallows the whole box — audit 2026-10-14).
+    // Gesture routing: the bottom-right corner zone resizes, everything
+    // else drags. A separate hit target fails on small widgets (its
+    // 44px touch area swallows the whole box — audit 2026-10-14).
+    const down = (e) => {
       if (inResizeZone(e, box)) startResize(e, w, box);
       else startDrag(e, w, box);
+    };
+    box.addEventListener("pointerdown", (e) => {
+      if (e.pointerType === "touch") return;   // touch uses touchstart below
+      down(e);
     });
+    box.addEventListener("touchstart", down, { passive: false });
     stage.appendChild(box);
   }
 }
@@ -13399,20 +13418,56 @@ function inResizeZone(e, box) {
   return (r.right - e.clientX) <= zone && (r.bottom - e.clientY) <= zone;
 }
 
+/* Gesture start must NOT rebuild the stage: iOS pins touch events to the
+ * touchstart target (and touch pointers implicitly capture it), so
+ * removing that element mid-gesture — as selectWidget()/renderAll() did —
+ * kills every following touchmove. Selection renders at gesture end. */
+function selectWidgetNoStage(id, box) {
+  state.selected = id;
+  renderWidgetList();
+  renderAppt();
+  document.querySelectorAll(".wbox.selected, .special-canvas.selected-canvas")
+    .forEach(el => el.classList.remove("selected", "selected-canvas"));
+  if (box) box.classList.add(box.tagName === "CANVAS" ? "selected-canvas" : "selected");
+}
+
+function gesturePoint(ev) {
+  return ev.touches && ev.touches.length ? ev.touches[0]
+       : ev.changedTouches && ev.changedTouches.length ? ev.changedTouches[0]
+       : ev;
+}
+
+function bindGesture(endEl, move, up) {
+  // Dual pipeline: native touch events (passive:false — the definitive
+  // iOS scroll/callout killer) plus pointer events for mouse/pen.
+  endEl.addEventListener("touchmove", move, { passive: false });
+  endEl.addEventListener("touchend", up);
+  endEl.addEventListener("touchcancel", up);
+  endEl.addEventListener("pointermove", move, { passive: false });
+  endEl.addEventListener("pointerup", up);
+  endEl.addEventListener("pointercancel", up);
+  return () => {
+    endEl.removeEventListener("touchmove", move);
+    endEl.removeEventListener("touchend", up);
+    endEl.removeEventListener("touchcancel", up);
+    endEl.removeEventListener("pointermove", move);
+    endEl.removeEventListener("pointerup", up);
+    endEl.removeEventListener("pointercancel", up);
+  };
+}
+
 function startDrag(e, w, box) {
   if (e.pointerType === "mouse" && e.button !== 0) return;
   e.preventDefault();
-  selectWidget(w.id);
+  selectWidgetNoStage(w.id, box);
   const scale = stageScale();
-  const sx = e.clientX, sy = e.clientY, ox = w.x, oy = w.y;
-  const pid = e.pointerId;
-  // Pointer capture keeps touch drags alive past the element edge; the
-  // cancel/lostcapture paths guarantee listeners never leak when iOS
-  // interrupts a gesture (audit 2026-10-14: drag state must clear on cancel).
-  try { e.target.setPointerCapture(pid); } catch (err) {}
+  const p0 = gesturePoint(e);
+  const sx = p0.clientX, sy = p0.clientY, ox = w.x, oy = w.y;
   const move = (ev) => {
-    w.x = snap(ox + (ev.clientX - sx) / scale);
-    w.y = snap(oy + (ev.clientY - sy) / scale);
+    const p = gesturePoint(ev);
+    if (ev.cancelable) ev.preventDefault();
+    w.x = snap(ox + (p.clientX - sx) / scale);
+    w.y = snap(oy + (p.clientY - sy) / scale);
     const V = vid();
     w.x = Math.max(0, Math.min(w.x, V.w - w.w));
     w.y = Math.max(0, Math.min(w.y, V.h - w.h));
@@ -13420,46 +13475,39 @@ function startDrag(e, w, box) {
     box.style.top = w.y * scale + "px";
     updatePosFields(w);
   };
-  const up = () => {
-    window.removeEventListener("pointermove", move);
-    window.removeEventListener("pointerup", up);
-    window.removeEventListener("pointercancel", up);
-    window.removeEventListener("lostpointercapture", up);
-    try { e.target.releasePointerCapture(pid); } catch (err) {}
+  let done = false;
+  const unbind = bindGesture(window, move, up);
+  function up() {
+    if (done) return;
+    done = true;
+    unbind();
     renderAll();
-  };
-  window.addEventListener("pointermove", move);
-  window.addEventListener("pointerup", up);
-  window.addEventListener("pointercancel", up);
-  window.addEventListener("lostpointercapture", up);
+  }
 }
 function startResize(e, w, box) {
   if (e.pointerType === "mouse" && e.button !== 0) return;
   e.preventDefault(); e.stopPropagation();
-  selectWidget(w.id);
+  selectWidgetNoStage(w.id, box);
   const scale = stageScale();
-  const sx = e.clientX, sy = e.clientY, ow = w.w, oh = w.h;
-  const pid = e.pointerId;
-  try { e.target.setPointerCapture(pid); } catch (err) {}
+  const p0 = gesturePoint(e);
+  const sx = p0.clientX, sy = p0.clientY, ow = w.w, oh = w.h;
   const move = (ev) => {
-    w.w = Math.max(60, snap(ow + (ev.clientX - sx) / scale));
-    w.h = Math.max(40, snap(oh + (ev.clientY - sy) / scale));
+    const p = gesturePoint(ev);
+    if (ev.cancelable) ev.preventDefault();
+    w.w = Math.max(60, snap(ow + (p.clientX - sx) / scale));
+    w.h = Math.max(40, snap(oh + (p.clientY - sy) / scale));
     box.style.width = w.w * scale + "px";
     box.style.height = w.h * scale + "px";
     updatePosFields(w);
   };
-  const up = () => {
-    window.removeEventListener("pointermove", move);
-    window.removeEventListener("pointerup", up);
-    window.removeEventListener("pointercancel", up);
-    window.removeEventListener("lostpointercapture", up);
-    try { e.target.releasePointerCapture(pid); } catch (err) {}
+  let done = false;
+  const unbind = bindGesture(window, move, up);
+  function up() {
+    if (done) return;
+    done = true;
+    unbind();
     renderAll();
-  };
-  window.addEventListener("pointermove", move);
-  window.addEventListener("pointerup", up);
-  window.addEventListener("pointercancel", up);
-  window.addEventListener("lostpointercapture", up);
+  }
 }
 const snap = (v) => Math.round(v / 10) * 10;
 

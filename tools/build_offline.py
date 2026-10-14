@@ -53,20 +53,22 @@ def main() -> None:
     # inline stylesheet (drop its @font-face blocks — fonts-embed owns fonts)
     css = (STATIC / "style.css").read_text()
     css = re.sub(r"@font-face\s*\{[^}]*\}", "", css)
-    html = html.replace('<link rel="stylesheet" href="/static/style.css">',
-                        "<style>\n" + css + "\n</style>")
+    html, n = re.subn(
+        r'<link rel="stylesheet" href="/static/style\.css(?:\?[^"]*)?">',
+        lambda m: "<style>\n" + css + "\n</style>", html, count=1)
+    assert n == 1, "missing stylesheet link"
 
     # inline fonts
     embed = ('<style id="fonts-embed">\n' + fonts_css() + "\n</style>")
     html = html.replace("<style>\n" + css + "\n</style>",
                         embed + "\n<style>\n" + css + "\n</style>")
 
-    # inline scripts in order
+    # inline scripts in order (allow cache-buster query suffixes)
     for path in SCRIPTS:
         js = (ROOT / path.lstrip("/")).read_text()
-        tag = f'<script src="{path}"></script>'
-        assert tag in html, f"missing script tag: {path}"
-        html = html.replace(tag, "<script>\n" + js + "\n</script>")
+        pat = re.compile(r'<script src="' + re.escape(path) + r'(?:\?[^"]*)?"></script>')
+        html, n = pat.subn(lambda m: "<script>\n" + js + "\n</script>", html, count=1)
+        assert n == 1, f"missing script tag: {path}"
 
     OUT.parent.mkdir(exist_ok=True)
     OUT.write_text(html)
