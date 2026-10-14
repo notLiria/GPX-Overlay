@@ -1141,11 +1141,20 @@ function renderMatch() {
     const src = m.method === "creationdate" ? "video timestamp"
       : m.method === "location" ? "video GPS"
       : m.method === "manual" ? "set by you" : "file time (guess)";
-    let txt = `⏱ ride ${Model.hms(m.clipStartRel)} · ${src}` +
+    // Show BOTH clocks: ride-elapsed and wall-clock (review 2026-10-14:
+    // "the video says 15:07 but the site says 4:00:47" — same instant,
+    // two references; the badge must speak both).
+    let clock = "";
+    if (state.telemetry && state.telemetry.t0) {
+      const d = new Date((state.telemetry.t0 + m.clipStartRel) * 1000);
+      clock = " · " + d.toLocaleTimeString([], {
+        hour: "numeric", minute: "2-digit", second: "2-digit" });
+    }
+    let txt = `⏱ ride ${Model.hms(m.clipStartRel)}${clock} · ${src}` +
       (m.confidence === "high" ? " ✓" : " ⚠");
     if (m.method === "creationdate" && m.locationStartRel != null) {
       txt += m.locationAgrees ? " · GPS agrees"
-        : ` · GPS suggests ${Model.hms(m.locationStartRel)} — check`;
+        : " · GPS differs (often just route snapping) — tap to check";
     }
     el.textContent = txt;
   } else {
@@ -1158,10 +1167,12 @@ function renderMatch() {
 function adjustMatch() {
   const cur = Model.hms((state.syncOffsetMs || 0) / 1000);
   const s = prompt(
-    "Where does this clip start in the ride?\nRide time (H:MM:SS) or seconds:", cur);
+    "Where does this clip start in the ride?\n" +
+    "Ride time (2:39:07 or seconds) OR wall-clock (15:07):", cur);
   if (s == null) return;
-  const secs = parseRideTime(s);
-  if (secs == null) return toast("Could not read that time — try 2:39:07 or 9547");
+  const secs = parseTimeInput(s);
+  if (secs == null) return toast(
+    "Could not read that time — try 2:39:07, 9547, or 15:07");
   state.syncOffsetMs = Math.round(secs * 1000);
   state.match = {
     matched: true, method: "manual", confidence: "high",
@@ -1173,6 +1184,31 @@ function adjustMatch() {
   renderMatch();
   renderAll();
   refreshTrueFrame();
+}
+
+/* Accepts seconds, ride-elapsed (2:39:07), or wall-clock (15:07 /
+ * 15:07:33). Two-part input reads as wall-clock first; three-part reads
+ * as ride-elapsed first; each falls back to the other when it lands
+ * outside the ride's span. Ambiguous two-part values (e.g. "5:30" for
+ * 5 min 30 s) resolve correctly when the clock reading falls outside
+ * the ride; type seconds to force elapsed. */
+function parseTimeInput(s) {
+  s = String(s).trim();
+  if (/^\d+(\.\d+)?$/.test(s)) return parseFloat(s);
+  const m = s.match(/^(?:(\d+):)?(\d+):(\d+(?:\.\d+)?)$/);
+  if (!m) return null;
+  const threePart = m[1] != null;
+  const asElapsed = (+m[1] || 0) * 3600 + (+m[2]) * 60 + (+m[3]);
+  const tel = state.telemetry;
+  if (!tel) return asElapsed;
+  const d = new Date(tel.t0 * 1000);
+  if (threePart) d.setHours(+m[1], +m[2], +m[3], 0);
+  else d.setHours(+m[2], +m[3], 0, 0);
+  const asClock = d.getTime() / 1000 - tel.t0;
+  const inRide = (v) => v >= 0 && v <= tel.duration + 60;
+  return threePart
+    ? (inRide(asElapsed) ? asElapsed : (inRide(asClock) ? asClock : null))
+    : (inRide(asClock) ? asClock : (inRide(asElapsed) ? asElapsed : null));
 }
 
 /* ---- ride-profile segment window (Phase B) ----
