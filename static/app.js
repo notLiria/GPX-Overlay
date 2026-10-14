@@ -926,22 +926,23 @@ function toast(msg, ms = 3200) {
   t._h = setTimeout(() => t.classList.add("hidden"), ms);
 }
 
-async function loadProject(meta, keepWidgets = false) {
+let _videoObjectUrl = null;
+function loadLocal(meta, tel, file) {
   state.meta = meta;
-  const tr = await fetch(`/api/projects/${meta.id}/telemetry`);
-  state.telemetry = await tr.json();
+  state.telemetry = tel;
+  state.videoFile = file;
   const vidEl = $("poster");
-  vidEl.src = `/api/projects/${meta.id}/video?t=${Date.now()}`;
+  if (_videoObjectUrl) URL.revokeObjectURL(_videoObjectUrl);
+  _videoObjectUrl = URL.createObjectURL(file);
+  vidEl.src = _videoObjectUrl;
   const mb = ((meta.video.size || 0) / 1048576).toFixed(1);
   const mbps = ((meta.video.bit_rate || 0) / 1e6).toFixed(1);
   $("fileStatus").textContent =
     `${meta.video.name} · ${meta.video.w}×${meta.video.h} · ` +
     `${meta.video.duration.toFixed(1)}s · ${mb} MB · ${mbps} Mbps · ` +
     `${meta.gpx.points} pts`;
-  if (!keepWidgets) {
-    state.widgets = PRESETS[$("presetSelect").value]();
-    state.selected = null;
-  }
+  state.widgets = PRESETS[$("presetSelect").value]();
+  state.selected = null;
   fitStage();
   renderAll();
 }
@@ -1019,25 +1020,27 @@ async function tryUpload() {
     $("fileStatus").textContent = pendingStatus();
     return;
   }
-  const fd = new FormData();
-  const nm = pending.video.name || "video";
-  fd.append("video", pending.video);
-  fd.append("gpx", pending.gpx);
-  $("fileStatus").textContent = `uploading ${nm} & parsing…`;
+  const vf = pending.video, gf = pending.gpx;
+  $("fileStatus").textContent =
+    `reading ${vf.name} + ${gf.name} (in this browser — nothing is uploaded)…`;
   try {
-    const r = await fetch("/api/projects", { method: "POST", body: fd });
-    if (!r.ok) throw new Error(await r.text());
-    const meta = await r.json();
+    const text = await gf.text();
+    const tel = Local.parseTrack(text);
+    const video = await Local.probeVideo(vf);
+    if (!video.w || !video.h) throw new Error("could not read video dimensions");
+    if (!video.duration) video.duration = tel.duration || 10;
     pending.video = pending.gpx = null;
     // reset pickers so re-selecting the same filename fires 'change' again
     $("videoInput").value = "";
     $("gpxInput").value = "";
-    await loadProject(meta);
-    const mb = ((meta.video.size || 0) / 1048576).toFixed(1);
-    toast(`✓ Registered new upload: ${meta.video.name} (${mb} MB on server)`, 5000);
+    loadLocal({ video, gpx: {
+      name: gf.name, points: tel.points.length,
+      duration: tel.duration, has: tel.has } }, tel, vf);
+    const mb = ((video.size || 0) / 1048576).toFixed(1);
+    toast(`✓ Loaded ${video.name} (${mb} MB) + ${gf.name} — fully in-browser`, 5000);
   } catch (e) {
-    $("fileStatus").textContent = "upload failed";
-    toast("Upload failed: " + e.message);
+    $("fileStatus").textContent = "load failed";
+    toast("Load failed: " + e.message);
   }
 }
 
@@ -1122,10 +1125,9 @@ async function doModeARender() {
   try {
     const probe = await ExportA.probeModeA(state.meta.video.w, state.meta.video.h);
     if (!probe.webgl2) throw new Error("WebGL2 is not available in this browser");
-    $("renderText").textContent = "fetching source file…";
-    const vr = await fetch(`/api/projects/${state.meta.id}/video`);
-    if (!vr.ok) throw new Error("could not fetch the source video");
-    const videoBlob = await vr.blob();
+    $("renderText").textContent = "preparing source file…";
+    const videoBlob = state.videoFile;
+    if (!videoBlob) throw new Error("no video loaded");
     const blob = await ExportA.exportModeA({
       videoBlob, telemetry: state.telemetry,
       widgets: state.widgets.map(w => ({ ...w })),
@@ -1152,85 +1154,9 @@ async function doModeARender() {
   }
 }
 
-/* ---- client export (Mode B): capture lossless frames here, server muxes */
-async function doClientRender() {
-  const V = state.meta.video;
-  const N = V.frames || Math.round(V.duration * (V.fps || 30));
-  const fps = V.fps || 30;
-  const off = (state.syncOffsetMs || 0) / 1000;
-  $("renderBar").classList.remove("hidden");
-  $("resultRow").classList.add("hidden");
-  $("renderFill").style.width = "0%";
-  try {
-    for (let i = 0; i < N; i++) {
-      const cv = await Capture.paintFrame(state.telemetry, state.widgets,
-                                          i / fps + off, V.w, V.h);
-      const blob = await new Promise(res => cv.toBlob(res, "image/png"));
-      const fd = new FormData();
-      fd.append("file", blob, "frame.png");
-      const r = await fetch(`/api/projects/${state.meta.id}/export_frame/${i + 1}`,
-                            { method: "POST", body: fd });
-      if (!r.ok) throw new Error(`frame ${i + 1} upload failed (${r.status})`);
-      const pct = Math.round(100 * (i + 1) / N);
-      $("renderFill").style.width = (pct * 0.8) + "%";
-      $("renderText").textContent = `capturing ${pct}% · frame ${i + 1}/${N}`;
-    }
-  } catch (e) {
-    $("renderText").textContent = "capture failed: " + e.message;
-    return toast("Client render failed: " + e.message);
-  }
-  const r = await fetch(`/api/projects/${state.meta.id}/export_client`, {
-    method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ frames: N, fps, sync_offset_ms: state.syncOffsetMs }),
-  });
-  const d = await r.json();
-  if (!r.ok) return toast("Export failed to start: " + (d.detail || r.status));
-  state.jobId = d.job;
-  pollJob();
-}
-
+/* ---- render: 100% client-side (single path) ---- */
 async function doRender() {
-  if (!state.meta) return toast("Load a video + GPX first");
-  const tgt = $("renderTarget");
-  if (tgt && tgt.value === "modeA") return doModeARender();
-  if (tgt && tgt.value === "client") return doClientRender();
-  const r = await fetch(`/api/projects/${state.meta.id}/render`, {
-    method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ layout: currentLayout(), sync_offset_ms: state.syncOffsetMs }),
-  });
-  const d = await r.json();
-  if (!r.ok) return toast("Render failed to start: " + (d.detail || r.status));
-  state.jobId = d.job;
-  $("renderBar").classList.remove("hidden");
-  $("resultRow").classList.add("hidden");
-  pollJob();
-}
-
-function pollJob() {
-  clearInterval(state.pollTimer);
-  state.pollTimer = setInterval(async () => {
-    const r = await fetch(`/api/jobs/${state.jobId}`);
-    if (!r.ok) return;
-    const j = await r.json();
-    const pct = j.total ? Math.round(100 * j.frames / j.total) : 0;
-    $("renderFill").style.width = pct + "%";
-    $("renderText").textContent =
-      j.status === "running" ? `rendering ${pct}% · frame ${j.frames}/${j.total}` :
-      j.status === "done" ? "done ✓" : `${j.status} — ${j.error || ""}`;
-    if (j.status === "done" || j.status === "failed") {
-      clearInterval(state.pollTimer);
-      if (j.status === "done") {
-        const url = `/api/jobs/${state.jobId}/result?t=${Date.now()}`;
-        const rv = $("resultVideo");
-        rv.src = url;
-        rv.onclick = () => openLightbox("video", url);
-        $("resultDownload").href = url + "&download=1";
-        $("resultRow").classList.remove("hidden");
-      } else {
-        toast("Render failed: " + j.error);
-      }
-    }
-  }, 700);
+  return doModeARender();
 }
 
 /* ---------------------------------------- true-frame preview (Phase 1)
@@ -1272,26 +1198,6 @@ async function refreshTrueFrame() {
   }
 }
 
-async function doPixelPreview() {
-  if (!state.meta) return toast("Load a video + GPX first");
-  toast("Rendering pixel-true preview…");
-  const r = await fetch(`/api/projects/${state.meta.id}/frame`, {
-    method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      layout: currentLayout(),
-      t_ms: Math.round(state.t * 1000),
-      sync_offset_ms: state.syncOffsetMs,
-    }),
-  });
-  if (!r.ok) return toast("Preview failed: " + await r.text());
-  const blob = await r.blob();
-  const pi = $("pixelImg");
-  const src = URL.createObjectURL(blob);
-  pi.src = src;
-  pi.onclick = () => openLightbox("image", src);
-  $("pixelPreview").classList.remove("hidden");
-}
-
 /* ---------------------------------------------------------- wiring */
 function renderAll() {
   renderStage();
@@ -1305,12 +1211,8 @@ window.addEventListener("DOMContentLoaded", () => {
   renderAll();
   wireDropZone();
 
-  // auto-load the most recent project so the app is ready on open
-  fetch("/api/projects").then(r => r.json()).then(meta => {
-    if (meta && meta.id) {
-      loadProject(meta).then(() => toast("Loaded your latest project"));
-    }
-  }).catch(() => {});
+  // 100% client-side: no auto-load from a server — files come from the
+  // pickers / drag-and-drop and stay in this browser.
 
   $("videoInput").addEventListener("change", uploadFiles);
   $("gpxInput").addEventListener("change", uploadFiles);

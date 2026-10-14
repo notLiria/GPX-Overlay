@@ -48,10 +48,8 @@
       <span id="scrubTime" class="mono">t = 0.0s</span>
     </div>
     <div class="action-row">
-      <select id="renderTarget" class="tiny" title="where to render">
-        <option value="client">this device (client)</option>
-        <option value="modeA">this device — full offline (beta)</option>
-        <option value="server">server</option>
+      <select id="renderTarget" class="tiny" hidden title="where to render">
+        <option value="modeA">this device (100% client-side)</option>
       </select>
       <button id="btnRender" class="primary">▶ RENDER</button>
       <span id="syncOffsetWrap" class="hint">sync offset
@@ -103,6 +101,7 @@
 <script src="/static/model.js"></script>
 <script src="/static/capture.js"></script>
 <script src="/static/export_a.js"></script>
+<script src="/static/local.js"></script>
 <script src="/static/app.js"></script>
 </body>
 </html>

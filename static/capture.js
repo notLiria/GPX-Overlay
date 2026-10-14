@@ -83,6 +83,9 @@ const Capture = (() => {
     ["DSEG7", "/static/fonts/DSEG7Classic.ttf", 400],
   ];
   function fontFaceCSS() {
+    // Embedded fonts (single-file offline build) win when present.
+    const embed = document.getElementById("fonts-embed");
+    if (embed) return Promise.resolve(embed.textContent);
     // Embed every UI font as a data URL so rasterized output has the exact
     // glyphs (Orbitron, Rajdhani, Inter, DSEG7 — gauge review fonts).
     if (!_fontCSSPromise) {
@@ -107,11 +110,30 @@ const Capture = (() => {
   function getTile(z, x, y) {
     const key = `${z}/${x}/${y}`;
     if (_tiles.has(key)) return _tiles.get(key);
-    const p = fetch(`https://tile.openstreetmap.org/${z}/${x}/${y}.png`,
-                    { signal: AbortSignal.timeout(10000) })
-      .then(r => r.ok ? r.blob() : null)
-      .then(b => b ? createImageBitmap(b) : null)
-      .catch(() => null);
+    const url = `https://tile.openstreetmap.org/${z}/${x}/${y}.png`;
+    const fetchTile = () =>
+      fetch(url, { signal: AbortSignal.timeout(10000) })
+        .then(r => r.ok ? r.blob() : null)
+        .then(b => b ? createImageBitmap(b) : null)
+        .catch(() => null);
+    const p = (async () => {
+      // Offline support: tiles are cached in Cache Storage on first use, so
+      // later renders work with no network. Missing tiles render as gaps.
+      try {
+        if (typeof caches !== "undefined") {
+          const cache = await caches.open("osm-tiles-v1");
+          const hit = await cache.match(url);
+          if (hit) return createImageBitmap(await hit.blob());
+          const r = await fetch(url, { signal: AbortSignal.timeout(10000) });
+          if (r.ok) {
+            cache.put(url, r.clone()).catch(() => {});
+            return createImageBitmap(await r.blob());
+          }
+          return null;
+        }
+      } catch (e) {}
+      return fetchTile();
+    })();
     _tiles.set(key, p);
     return p;
   }
