@@ -714,6 +714,7 @@ function selectedWidgetAndBox() {
  * directly on a widget still targets that widget. */
 function dispatchPinch(e) {
   if (!e.touches || e.touches.length < 2) return;
+  e.preventDefault();   // never let iOS treat two fingers as page zoom
   const t0 = e.touches[0];
   const el = document.elementFromPoint(t0.clientX, t0.clientY);
   const boxEl = el && el.closest ? el.closest(".wbox, .special-canvas") : null;
@@ -724,7 +725,6 @@ function dispatchPinch(e) {
   }
   if (!target) target = selectedWidgetAndBox();
   if (!target) return;
-  e.preventDefault();
   if (target.w.id !== state.selected) selectWidgetNoStage(target.w.id, target.box);
   startPinch(e, target.w, target.box);
 }
@@ -761,19 +761,25 @@ function setGesture(g) {
 function startPinch(e, w, box) {
   e.preventDefault();
   selectWidgetNoStage(w.id, box);
-  const scale = stageScale();
   const [a, b] = [e.touches[0], e.touches[1]];
   const d0 = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY) || 1;
   const ow = w.w, oh = w.h;
+  // Scale from the pinch midpoint so the widget grows where the fingers are
+  const rect = box.getBoundingClientRect();
+  box.style.transformOrigin =
+    ((a.clientX + b.clientX) / 2 - rect.left) + "px " +
+    ((a.clientY + b.clientY) / 2 - rect.top) + "px";
   const move = (ev) => {
     if (ev.cancelable) ev.preventDefault();
-    if (!ev.touches || ev.touches.length < 2) return;   // one finger lifts
+    if (!ev.touches || ev.touches.length < 2) return;
     const [p, q] = [ev.touches[0], ev.touches[1]];
     const f = Math.hypot(p.clientX - q.clientX, p.clientY - q.clientY) / d0;
+    // Live feedback is ONE compositor transform — layout waits for release.
+    // (Review 2026-10-15: per-move width/height writes reflowed the page
+    // and made pinch feel ~1s laggy on the phone.)
+    box.style.transform = "scale(" + f + ")";
     w.w = Math.max(60, Math.min(4000, snap(ow * f)));
     w.h = Math.max(40, Math.min(4000, snap(oh * f)));
-    box.style.width = w.w * scale + "px";
-    box.style.height = w.h * scale + "px";
     updatePosFields(w);
   };
   let done = false;
@@ -787,12 +793,15 @@ function startPinch(e, w, box) {
     done = true;
     unbind();
     activeGesture = null;
+    box.style.transform = "";
+    box.style.transformOrigin = "";
     renderAll();
+    refreshTrueFrame();   // crisp frame NOW — not after the 250ms debounce
   };
   window.addEventListener("touchmove", move, { passive: false });
   window.addEventListener("touchend", up);
   window.addEventListener("touchcancel", up);
-  setGesture({ cancel: () => { done = true; unbind(); } });
+  setGesture({ cancel: () => { done = true; unbind(); box.style.transform = ""; } });
 }
 
 function startDrag(e, w, box) {
@@ -824,6 +833,7 @@ function startDrag(e, w, box) {
     unbind();
     activeGesture = null;
     renderAll();
+    refreshTrueFrame();   // crisp frame NOW — not after the 250ms debounce
   }
 }
 function startResize(e, w, box) {
@@ -852,6 +862,7 @@ function startResize(e, w, box) {
     unbind();
     activeGesture = null;
     renderAll();
+    refreshTrueFrame();   // crisp frame NOW — not after the 250ms debounce
   }
 }
 const snap = (v) => Math.round(v / 10) * 10;
@@ -1342,6 +1353,7 @@ function setStageMode(trueMode) {
 }
 let _tfSeq = 0;
 async function refreshTrueFrame() {
+  clearTimeout(_tfTimer);   // an explicit refresh supersedes any pending one
   const cvEl = $("trueFrame");
   if (!cvEl || !state.meta || !state.telemetry) return;
   const seq = ++_tfSeq;
