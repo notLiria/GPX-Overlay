@@ -1118,6 +1118,165 @@ function loadLocal(meta, tel, file) {
   state.selected = null;
   fitStage();
   renderAll();
+  $("syncOffset").value = state.syncOffsetMs || 0;
+  renderMatch();
+}
+
+/* ---- clip-to-ride match badge + manual pin ---- */
+function parseRideTime(s) {
+  s = String(s).trim();
+  if (/^\d+(\.\d+)?$/.test(s)) return parseFloat(s);
+  const m = s.match(/^(?:(\d+):)?(\d+):(\d+(?:\.\d+)?)$/);
+  if (!m) return null;
+  return (+m[1] || 0) * 3600 + (+m[2]) * 60 + (+m[3]);
+}
+
+function renderMatch() {
+  const el = $("matchBadge");
+  if (!el) return;
+  if (!state.meta) { el.classList.add("hidden"); return; }
+  el.classList.remove("hidden");
+  const m = state.match;
+  if (m && m.matched) {
+    const src = m.method === "creationdate" ? "video timestamp"
+      : m.method === "location" ? "video GPS"
+      : m.method === "manual" ? "set by you" : "file time (guess)";
+    let txt = `⏱ ride ${Model.hms(m.clipStartRel)} · ${src}` +
+      (m.confidence === "high" ? " ✓" : " ⚠");
+    if (m.method === "creationdate" && m.locationStartRel != null) {
+      txt += m.locationAgrees ? " · GPS agrees"
+        : ` · GPS suggests ${Model.hms(m.locationStartRel)} — check`;
+    }
+    el.textContent = txt;
+  } else {
+    el.textContent = "⏱ clip not matched — tap to set where it starts in the ride";
+  }
+  el.title = (m && m.note) || "tap to adjust where the clip starts";
+  el.onclick = adjustMatch;
+}
+
+function adjustMatch() {
+  const cur = Model.hms((state.syncOffsetMs || 0) / 1000);
+  const s = prompt(
+    "Where does this clip start in the ride?\nRide time (H:MM:SS) or seconds:", cur);
+  if (s == null) return;
+  const secs = parseRideTime(s);
+  if (secs == null) return toast("Could not read that time — try 2:39:07 or 9547");
+  state.syncOffsetMs = Math.round(secs * 1000);
+  state.match = {
+    matched: true, method: "manual", confidence: "high",
+    clipStartRel: secs, note: "set by you",
+    locationStartRel: state.match ? state.match.locationStartRel : null,
+    locationAgrees: state.match ? state.match.locationAgrees : null,
+  };
+  $("syncOffset").value = state.syncOffsetMs;
+  renderMatch();
+  renderAll();
+  refreshTrueFrame();
+}
+
+/* ---- ride-profile segment window (Phase B) ----
+ * Overlays the track widget: the band shows where the clip sits in the
+ * ride; dragging the strip remaps the clip start. Editor chrome — never
+ * part of the exported frame (positioned outside the render layers). */
+function positionSegWindow() {
+  const el = $("segWindow");
+  if (!el) return;
+  const m = state.match;
+  if (!state.meta || !m || !m.matched) {
+    el.classList.add("hidden");
+    return;
+  }
+  el.classList.remove("hidden");
+  const scale = stageScale();
+  const V = vid();
+  const rideDur = (state.telemetry && state.telemetry.duration) || V.duration;
+  // Overlays the track widget when present; otherwise docks as its own
+  // slim ride-profile strip at the bottom of the stage.
+  const trackW = state.widgets.find(w => w.type === "track");
+  let x, y, wW, hH, ownProfile;
+  if (trackW) {
+    x = trackW.x * scale; y = trackW.y * scale;
+    wW = trackW.w * scale; hH = trackW.h * scale;
+    ownProfile = false;
+  } else {
+    x = 0; wW = $("stage").clientWidth;
+    hH = 48; y = $("stage").clientHeight - hH - 8;
+    ownProfile = true;
+  }
+  el.style.left = x + "px";
+  el.style.top = y + "px";
+  el.style.width = wW + "px";
+  el.style.height = hH + "px";
+  const band = el.querySelector(".seg-band");
+  const start = (state.syncOffsetMs || 0) / 1000;
+  const f0 = Math.max(0, Math.min(1, start / (rideDur || 1)));
+  const f1 = Math.max(0, Math.min(1, (start + V.duration) / (rideDur || 1)));
+  band.style.left = f0 * wW + "px";
+  band.style.width = Math.max(6, (f1 - f0) * wW) + "px";
+  el._wW = wW;
+  el._rideDur = rideDur;
+  // draw the ride profile only in standalone mode (a track widget already
+  // draws its own chart beneath the band)
+  const cv = el.querySelector(".seg-profile");
+  cv.width = Math.max(2, Math.round(wW));
+  cv.height = Math.max(2, Math.round(hH));
+  const g = cv.getContext("2d");
+  g.clearRect(0, 0, cv.width, cv.height);
+  if (ownProfile && state.telemetry && state.telemetry.points.length > 1) {
+    const pts = state.telemetry.points;
+    let mn = Infinity, mx = -Infinity;
+    for (const p of pts) {
+      if (p.ele < mn) mn = p.ele;
+      if (p.ele > mx) mx = p.ele;
+    }
+    const dur = rideDur || 1;
+    g.beginPath();
+    pts.forEach((p, i) => {
+      const px = (p.rel / dur) * cv.width;
+      const py = cv.height - 4 - ((p.ele - mn) / ((mx - mn) || 1)) * (cv.height - 10);
+      i ? g.lineTo(px, py) : g.moveTo(px, py);
+    });
+    g.lineTo(cv.width, cv.height);
+    g.lineTo(0, cv.height);
+    g.closePath();
+    g.fillStyle = "rgba(232,234,240,0.18)";
+    g.fill();
+  }
+}
+
+function startSegDrag(e) {
+  if (e.pointerType === "mouse" && e.button !== 0) return;
+  e.preventDefault();
+  const el = $("segWindow");
+  const rect = el.getBoundingClientRect();
+  const set = (ev) => {
+    const p = gesturePoint(ev);
+    if (ev.cancelable) ev.preventDefault();
+    const f = Math.max(0, Math.min(1, (p.clientX - rect.left) / (rect.width || 1)));
+    state.syncOffsetMs = Math.round(f * (el._rideDur || 1) * 1000);
+    $("syncOffset").value = state.syncOffsetMs;
+    if (state.match) {
+      state.match.clipStartRel = state.syncOffsetMs / 1000;
+      state.match.method = "manual";   // you touched it — it's yours now
+    }
+    positionSegWindow();
+    renderStage();
+  };
+  set(e);   // a tap lands the position instantly; drag refines it
+  let done = false;
+  const unbind = bindGesture(window, set, up);
+  function up() {
+    if (done) return;
+    done = true;
+    unbind();
+    activeGesture = null;
+    renderMatch();
+    renderAll();
+    refreshTrueFrame();
+  }
+  gestureWidget = null;
+  setGesture({ cancel: () => { done = true; unbind(); } });
 }
 
 function clearFiles() {
@@ -1199,9 +1358,13 @@ async function tryUpload() {
   try {
     const text = await gf.text();
     const tel = Local.parseTrack(text);
-    const video = await Local.probeVideo(vf);
+    const video = await Local.probeVideoWithMeta(vf);
     if (!video.w || !video.h) throw new Error("could not read video dimensions");
     if (!video.duration) video.duration = tel.duration || 10;
+    // Time-match: where does this clip fall on the ride? (plan 2026-10-15)
+    const match = Local.matchClipToRide(tel, video, vf.lastModified);
+    state.match = match;
+    state.syncOffsetMs = match.matched ? Math.round(match.clipStartRel * 1000) : 0;
     pending.video = pending.gpx = null;
     // reset pickers so re-selecting the same filename fires 'change' again
     $("videoInput").value = "";
@@ -1377,6 +1540,7 @@ function renderAll() {
   renderStage();
   renderWidgetList();
   renderAppt();
+  positionSegWindow();
 }
 
 window.addEventListener("DOMContentLoaded", () => {
@@ -1388,6 +1552,19 @@ window.addEventListener("DOMContentLoaded", () => {
   // Selection-governed pinch: second finger may land anywhere on the
   // preview; the selected widget (or the one under the first finger) resizes.
   $("stage").addEventListener("touchstart", dispatchPinch, { passive: false });
+
+  // Ride-profile segment window: created here so it rides the stage but
+  // stays outside the render layers (editor chrome, never exported).
+  const seg = document.createElement("div");
+  seg.id = "segWindow";
+  seg.className = "seg-window hidden";
+  seg.innerHTML = '<canvas class="seg-profile"></canvas><div class="seg-band"></div>';
+  $("stage").appendChild(seg);
+  seg.addEventListener("pointerdown", (e) => {
+    if (e.pointerType === "touch") return;
+    startSegDrag(e);
+  });
+  seg.addEventListener("touchstart", startSegDrag, { passive: false });
 
   // 100% client-side: no auto-load from a server — files come from the
   // pickers / drag-and-drop and stay in this browser.
@@ -1432,6 +1609,9 @@ window.addEventListener("DOMContentLoaded", () => {
   });
   $("syncOffset").addEventListener("input", () => {
     state.syncOffsetMs = parseInt($("syncOffset").value || "0", 10);
+    if (state.match) state.match.clipStartRel = (state.syncOffsetMs || 0) / 1000;
+    renderMatch();
+    positionSegWindow();
     renderStage();
   });
   $("btnRender").addEventListener("click", doRender);

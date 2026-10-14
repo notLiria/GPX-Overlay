@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>GPX Overlay Studio</title>
-<link rel="stylesheet" href="/static/style.css?v=20261014">
+<link rel="stylesheet" href="/static/style.css?v=20261015">
 </head>
 <body>
 <header>
@@ -47,6 +47,7 @@
       <button id="btnFwd" title="step forward">▶</button>
       <span id="scrubTime" class="mono">t = 0.0s</span>
     </div>
+    <div class="match-row"><button id="matchBadge" class="match-badge hidden" type="button"></button></div>
     <div class="action-row">
       <select id="renderTarget" class="tiny" hidden title="where to render">
         <option value="modeA">this device (100% client-side)</option>
@@ -96,12 +97,12 @@
   <video id="lbVideo" class="hidden" controls playsinline></video>
   <img id="lbImg" class="hidden" alt="enlarged preview">
 </div>
-<script src="/static/vendor/mp4box.js?v=20261014"></script>
-<script src="/static/vendor/mp4-muxer.js?v=20261014"></script>
-<script src="/static/model.js?v=20261014"></script>
-<script src="/static/capture.js?v=20261014"></script>
-<script src="/static/export_a.js?v=20261014"></script>
-<script src="/static/local.js?v=20261014"></script>
-<script src="/static/app.js?v=20261014"></script>
+<script src="/static/vendor/mp4box.js?v=20261015"></script>
+<script src="/static/vendor/mp4-muxer.js?v=20261015"></script>
+<script src="/static/model.js?v=20261015"></script>
+<script src="/static/capture.js?v=20261015"></script>
+<script src="/static/export_a.js?v=20261015"></script>
+<script src="/static/local.js?v=20261015"></script>
+<script src="/static/app.js?v=20261015"></script>
 </body>
 </html>

@@ -233,5 +233,110 @@
     });
   };
 
+  /* probeVideo + capture metadata (creation date / GPS) for ride matching */
+  Local.probeVideoWithMeta = function (file) {
+    return Local.probeVideo(file).then(async (out) => {
+      try {
+        const buf = await file.arrayBuffer();
+        const qtm = Local.extractQuickTimeMeta(buf);
+        out.creationdate = qtm.creationdate;
+        out.location = qtm.location;
+        out.locationAccuracy = qtm.locationAccuracy;
+      } catch (e) {}
+      return out;
+    });
+  };
+
+  /* ------------------------------------ clip-to-ride time matching */
+
+  function parseISO8601(s) {
+    // iOS writes -0400; normalize to -04:00 for every engine
+    const norm = s.replace(/([+-]\d{2})(\d{2})$/, "$1:$2");
+    const ms = Date.parse(norm);
+    return Number.isFinite(ms) ? ms / 1000 : null;
+  }
+
+  function winToStr(bytes, start, len) {
+    let s = "";
+    const end = Math.min(bytes.length, start + len);
+    for (let i = start; i < end; i += 8192)
+      s += String.fromCharCode(...bytes.subarray(i, Math.min(end, i + 8192)));
+    return s;
+  }
+
+  /* QuickTime mdta: com.apple.quicktime.creationdate and
+   * ...location.ISO6709 live in moov/udta/meta keys+ilst. The keys table
+   * and the values are NOT adjacent atoms, so scan the whole file for the
+   * distinctive VALUE patterns instead (verified on iPhone .mov,
+   * 2026-10-14; an ISO-8601 wall-clock string in a .mov is the capture
+   * date — box timestamps are binary). */
+  Local.extractQuickTimeMeta = function (buf) {
+    const bytes = new Uint8Array(buf);
+    const out = { creationdate: null, location: null, locationAccuracy: null };
+    const s = winToStr(bytes, 0, bytes.length);
+    const ts = s.match(/20\d\d-\d\d-\d\dT\d\d:\d\d:\d\d(?:[+-]\d{2}:?\d{2}|Z)/);
+    if (ts) out.creationdate = parseISO8601(ts[0]);
+    const lm = s.match(/([+-]\d{2,3}\.\d+)([+-]\d{2,3}\.\d+)([+-]\d+\.\d+)?/);
+    if (lm) out.location = {
+      lat: parseFloat(lm[1]), lon: parseFloat(lm[2]),
+      alt: lm[3] ? parseFloat(lm[3]) : null,
+    };
+    return out;
+  };
+
+  /* Match a clip to a ride: where does the video fall on the GPX timeline?
+   * Tier 1: the capture timestamp (high confidence).
+   * Tier 2: the clip's GPS point nearest to the route (cross-check or
+   *         fallback — loops can alias, so time wins when both exist).
+   * Tier 3: file mtime (a flagged guess when metadata was stripped). */
+  Local.matchClipToRide = function (tel, video, fileLastMs) {
+    const out = {
+      matched: false, method: "none", confidence: "low",
+      clipStartRel: 0, note: "",
+      locationStartRel: null, locationAgrees: null,
+    };
+    const t0 = tel.t0, tEnd = tel.t0 + tel.duration;
+    const margin = 30;
+    if (video.creationdate &&
+        video.creationdate >= t0 - margin && video.creationdate <= tEnd + margin) {
+      out.matched = true;
+      out.method = "creationdate";
+      out.clipStartRel = Math.max(0, video.creationdate - t0);
+      out.confidence = "high";
+    }
+    if (video.location && tel.points.length > 1) {
+      let best = null;
+      for (const p of tel.points) {
+        const d = hav(p, video.location);
+        if (!best || d < best.d) best = { d, rel: p.rel };
+      }
+      out.locationStartRel = best.rel;
+      if (out.matched && out.method === "creationdate") {
+        out.locationAgrees = Math.abs(best.rel - out.clipStartRel) <= 60;
+        if (!out.locationAgrees) {
+          out.confidence = "low";
+          out.note = "GPS places the clip elsewhere on the ride — check the start";
+        }
+      } else if (!out.matched) {
+        out.matched = true;
+        out.method = "location";
+        out.clipStartRel = best.rel;
+        out.confidence = "low";
+        out.note = "matched by GPS only — on looped routes this can land on the wrong lap";
+      }
+    }
+    if (!out.matched && fileLastMs) {
+      const ft = fileLastMs / 1000;
+      if (ft >= t0 - margin && ft <= tEnd + margin) {
+        out.matched = true;
+        out.method = "file-time";
+        out.clipStartRel = Math.max(0, ft - t0);
+        out.confidence = "low";
+        out.note = "video metadata is missing — file time is a guess";
+      }
+    }
+    return out;
+  };
+
   root.Local = Local;
 })(typeof self !== "undefined" ? self : this);

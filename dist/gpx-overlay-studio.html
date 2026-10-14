@@ -318,6 +318,25 @@ body { padding-bottom: env(safe-area-inset-bottom); }
   -webkit-touch-callout: none;
 }
 
+/* ---- clip-to-ride match badge + ride-profile segment window ---- */
+.match-row { display: flex; justify-content: center; padding: 2px 0; }
+.match-badge {
+  background: var(--panel2); border: 1px solid var(--border); color: var(--text);
+  border-radius: 999px; padding: 6px 14px; font-size: 13px; cursor: pointer;
+}
+.match-badge:hover { border-color: var(--accent2, var(--accent)); }
+.seg-window {
+  position: absolute; z-index: 20;   /* editor chrome: above widgets */ cursor: ew-resize; touch-action: none;
+  background: rgba(255, 107, 53, 0.08);
+}
+.seg-band {
+  position: absolute; top: 0; bottom: 0;
+  background: rgba(255, 107, 53, 0.28);
+  border-left: 2px solid var(--accent); border-right: 2px solid var(--accent);
+}
+.seg-profile { position: absolute; inset: 0; width: 100%; height: 100%; }
+.toast { pointer-events: none; }   /* informational only — never blocks taps */
+
 </style>
 </head>
 <body>
@@ -361,6 +380,7 @@ body { padding-bottom: env(safe-area-inset-bottom); }
       <button id="btnFwd" title="step forward">▶</button>
       <span id="scrubTime" class="mono">t = 0.0s</span>
     </div>
+    <div class="match-row"><button id="matchBadge" class="match-badge hidden" type="button"></button></div>
     <div class="action-row">
       <select id="renderTarget" class="tiny" hidden title="where to render">
         <option value="modeA">this device (100% client-side)</option>
@@ -12738,6 +12758,111 @@ const ExportA = (() => {
     });
   };
 
+  /* probeVideo + capture metadata (creation date / GPS) for ride matching */
+  Local.probeVideoWithMeta = function (file) {
+    return Local.probeVideo(file).then(async (out) => {
+      try {
+        const buf = await file.arrayBuffer();
+        const qtm = Local.extractQuickTimeMeta(buf);
+        out.creationdate = qtm.creationdate;
+        out.location = qtm.location;
+        out.locationAccuracy = qtm.locationAccuracy;
+      } catch (e) {}
+      return out;
+    });
+  };
+
+  /* ------------------------------------ clip-to-ride time matching */
+
+  function parseISO8601(s) {
+    // iOS writes -0400; normalize to -04:00 for every engine
+    const norm = s.replace(/([+-]\d{2})(\d{2})$/, "$1:$2");
+    const ms = Date.parse(norm);
+    return Number.isFinite(ms) ? ms / 1000 : null;
+  }
+
+  function winToStr(bytes, start, len) {
+    let s = "";
+    const end = Math.min(bytes.length, start + len);
+    for (let i = start; i < end; i += 8192)
+      s += String.fromCharCode(...bytes.subarray(i, Math.min(end, i + 8192)));
+    return s;
+  }
+
+  /* QuickTime mdta: com.apple.quicktime.creationdate and
+   * ...location.ISO6709 live in moov/udta/meta keys+ilst. The keys table
+   * and the values are NOT adjacent atoms, so scan the whole file for the
+   * distinctive VALUE patterns instead (verified on iPhone .mov,
+   * 2026-10-14; an ISO-8601 wall-clock string in a .mov is the capture
+   * date — box timestamps are binary). */
+  Local.extractQuickTimeMeta = function (buf) {
+    const bytes = new Uint8Array(buf);
+    const out = { creationdate: null, location: null, locationAccuracy: null };
+    const s = winToStr(bytes, 0, bytes.length);
+    const ts = s.match(/20\d\d-\d\d-\d\dT\d\d:\d\d:\d\d(?:[+-]\d{2}:?\d{2}|Z)/);
+    if (ts) out.creationdate = parseISO8601(ts[0]);
+    const lm = s.match(/([+-]\d{2,3}\.\d+)([+-]\d{2,3}\.\d+)([+-]\d+\.\d+)?/);
+    if (lm) out.location = {
+      lat: parseFloat(lm[1]), lon: parseFloat(lm[2]),
+      alt: lm[3] ? parseFloat(lm[3]) : null,
+    };
+    return out;
+  };
+
+  /* Match a clip to a ride: where does the video fall on the GPX timeline?
+   * Tier 1: the capture timestamp (high confidence).
+   * Tier 2: the clip's GPS point nearest to the route (cross-check or
+   *         fallback — loops can alias, so time wins when both exist).
+   * Tier 3: file mtime (a flagged guess when metadata was stripped). */
+  Local.matchClipToRide = function (tel, video, fileLastMs) {
+    const out = {
+      matched: false, method: "none", confidence: "low",
+      clipStartRel: 0, note: "",
+      locationStartRel: null, locationAgrees: null,
+    };
+    const t0 = tel.t0, tEnd = tel.t0 + tel.duration;
+    const margin = 30;
+    if (video.creationdate &&
+        video.creationdate >= t0 - margin && video.creationdate <= tEnd + margin) {
+      out.matched = true;
+      out.method = "creationdate";
+      out.clipStartRel = Math.max(0, video.creationdate - t0);
+      out.confidence = "high";
+    }
+    if (video.location && tel.points.length > 1) {
+      let best = null;
+      for (const p of tel.points) {
+        const d = hav(p, video.location);
+        if (!best || d < best.d) best = { d, rel: p.rel };
+      }
+      out.locationStartRel = best.rel;
+      if (out.matched && out.method === "creationdate") {
+        out.locationAgrees = Math.abs(best.rel - out.clipStartRel) <= 60;
+        if (!out.locationAgrees) {
+          out.confidence = "low";
+          out.note = "GPS places the clip elsewhere on the ride — check the start";
+        }
+      } else if (!out.matched) {
+        out.matched = true;
+        out.method = "location";
+        out.clipStartRel = best.rel;
+        out.confidence = "low";
+        out.note = "matched by GPS only — on looped routes this can land on the wrong lap";
+      }
+    }
+    if (!out.matched && fileLastMs) {
+      const ft = fileLastMs / 1000;
+      if (ft >= t0 - margin && ft <= tEnd + margin) {
+        out.matched = true;
+        out.method = "file-time";
+        out.clipStartRel = Math.max(0, ft - t0);
+        out.confidence = "low";
+        out.note = "video metadata is missing — file time is a guess";
+      }
+    }
+    return out;
+  };
+
   root.Local = Local;
 })(typeof self !== "undefined" ? self : this);
 
@@ -13863,6 +13988,165 @@ function loadLocal(meta, tel, file) {
   state.selected = null;
   fitStage();
   renderAll();
+  $("syncOffset").value = state.syncOffsetMs || 0;
+  renderMatch();
+}
+
+/* ---- clip-to-ride match badge + manual pin ---- */
+function parseRideTime(s) {
+  s = String(s).trim();
+  if (/^\d+(\.\d+)?$/.test(s)) return parseFloat(s);
+  const m = s.match(/^(?:(\d+):)?(\d+):(\d+(?:\.\d+)?)$/);
+  if (!m) return null;
+  return (+m[1] || 0) * 3600 + (+m[2]) * 60 + (+m[3]);
+}
+
+function renderMatch() {
+  const el = $("matchBadge");
+  if (!el) return;
+  if (!state.meta) { el.classList.add("hidden"); return; }
+  el.classList.remove("hidden");
+  const m = state.match;
+  if (m && m.matched) {
+    const src = m.method === "creationdate" ? "video timestamp"
+      : m.method === "location" ? "video GPS"
+      : m.method === "manual" ? "set by you" : "file time (guess)";
+    let txt = `⏱ ride ${Model.hms(m.clipStartRel)} · ${src}` +
+      (m.confidence === "high" ? " ✓" : " ⚠");
+    if (m.method === "creationdate" && m.locationStartRel != null) {
+      txt += m.locationAgrees ? " · GPS agrees"
+        : ` · GPS suggests ${Model.hms(m.locationStartRel)} — check`;
+    }
+    el.textContent = txt;
+  } else {
+    el.textContent = "⏱ clip not matched — tap to set where it starts in the ride";
+  }
+  el.title = (m && m.note) || "tap to adjust where the clip starts";
+  el.onclick = adjustMatch;
+}
+
+function adjustMatch() {
+  const cur = Model.hms((state.syncOffsetMs || 0) / 1000);
+  const s = prompt(
+    "Where does this clip start in the ride?\nRide time (H:MM:SS) or seconds:", cur);
+  if (s == null) return;
+  const secs = parseRideTime(s);
+  if (secs == null) return toast("Could not read that time — try 2:39:07 or 9547");
+  state.syncOffsetMs = Math.round(secs * 1000);
+  state.match = {
+    matched: true, method: "manual", confidence: "high",
+    clipStartRel: secs, note: "set by you",
+    locationStartRel: state.match ? state.match.locationStartRel : null,
+    locationAgrees: state.match ? state.match.locationAgrees : null,
+  };
+  $("syncOffset").value = state.syncOffsetMs;
+  renderMatch();
+  renderAll();
+  refreshTrueFrame();
+}
+
+/* ---- ride-profile segment window (Phase B) ----
+ * Overlays the track widget: the band shows where the clip sits in the
+ * ride; dragging the strip remaps the clip start. Editor chrome — never
+ * part of the exported frame (positioned outside the render layers). */
+function positionSegWindow() {
+  const el = $("segWindow");
+  if (!el) return;
+  const m = state.match;
+  if (!state.meta || !m || !m.matched) {
+    el.classList.add("hidden");
+    return;
+  }
+  el.classList.remove("hidden");
+  const scale = stageScale();
+  const V = vid();
+  const rideDur = (state.telemetry && state.telemetry.duration) || V.duration;
+  // Overlays the track widget when present; otherwise docks as its own
+  // slim ride-profile strip at the bottom of the stage.
+  const trackW = state.widgets.find(w => w.type === "track");
+  let x, y, wW, hH, ownProfile;
+  if (trackW) {
+    x = trackW.x * scale; y = trackW.y * scale;
+    wW = trackW.w * scale; hH = trackW.h * scale;
+    ownProfile = false;
+  } else {
+    x = 0; wW = $("stage").clientWidth;
+    hH = 48; y = $("stage").clientHeight - hH - 8;
+    ownProfile = true;
+  }
+  el.style.left = x + "px";
+  el.style.top = y + "px";
+  el.style.width = wW + "px";
+  el.style.height = hH + "px";
+  const band = el.querySelector(".seg-band");
+  const start = (state.syncOffsetMs || 0) / 1000;
+  const f0 = Math.max(0, Math.min(1, start / (rideDur || 1)));
+  const f1 = Math.max(0, Math.min(1, (start + V.duration) / (rideDur || 1)));
+  band.style.left = f0 * wW + "px";
+  band.style.width = Math.max(6, (f1 - f0) * wW) + "px";
+  el._wW = wW;
+  el._rideDur = rideDur;
+  // draw the ride profile only in standalone mode (a track widget already
+  // draws its own chart beneath the band)
+  const cv = el.querySelector(".seg-profile");
+  cv.width = Math.max(2, Math.round(wW));
+  cv.height = Math.max(2, Math.round(hH));
+  const g = cv.getContext("2d");
+  g.clearRect(0, 0, cv.width, cv.height);
+  if (ownProfile && state.telemetry && state.telemetry.points.length > 1) {
+    const pts = state.telemetry.points;
+    let mn = Infinity, mx = -Infinity;
+    for (const p of pts) {
+      if (p.ele < mn) mn = p.ele;
+      if (p.ele > mx) mx = p.ele;
+    }
+    const dur = rideDur || 1;
+    g.beginPath();
+    pts.forEach((p, i) => {
+      const px = (p.rel / dur) * cv.width;
+      const py = cv.height - 4 - ((p.ele - mn) / ((mx - mn) || 1)) * (cv.height - 10);
+      i ? g.lineTo(px, py) : g.moveTo(px, py);
+    });
+    g.lineTo(cv.width, cv.height);
+    g.lineTo(0, cv.height);
+    g.closePath();
+    g.fillStyle = "rgba(232,234,240,0.18)";
+    g.fill();
+  }
+}
+
+function startSegDrag(e) {
+  if (e.pointerType === "mouse" && e.button !== 0) return;
+  e.preventDefault();
+  const el = $("segWindow");
+  const rect = el.getBoundingClientRect();
+  const set = (ev) => {
+    const p = gesturePoint(ev);
+    if (ev.cancelable) ev.preventDefault();
+    const f = Math.max(0, Math.min(1, (p.clientX - rect.left) / (rect.width || 1)));
+    state.syncOffsetMs = Math.round(f * (el._rideDur || 1) * 1000);
+    $("syncOffset").value = state.syncOffsetMs;
+    if (state.match) {
+      state.match.clipStartRel = state.syncOffsetMs / 1000;
+      state.match.method = "manual";   // you touched it — it's yours now
+    }
+    positionSegWindow();
+    renderStage();
+  };
+  set(e);   // a tap lands the position instantly; drag refines it
+  let done = false;
+  const unbind = bindGesture(window, set, up);
+  function up() {
+    if (done) return;
+    done = true;
+    unbind();
+    activeGesture = null;
+    renderMatch();
+    renderAll();
+    refreshTrueFrame();
+  }
+  gestureWidget = null;
+  setGesture({ cancel: () => { done = true; unbind(); } });
 }
 
 function clearFiles() {
@@ -13944,9 +14228,13 @@ async function tryUpload() {
   try {
     const text = await gf.text();
     const tel = Local.parseTrack(text);
-    const video = await Local.probeVideo(vf);
+    const video = await Local.probeVideoWithMeta(vf);
     if (!video.w || !video.h) throw new Error("could not read video dimensions");
     if (!video.duration) video.duration = tel.duration || 10;
+    // Time-match: where does this clip fall on the ride? (plan 2026-10-15)
+    const match = Local.matchClipToRide(tel, video, vf.lastModified);
+    state.match = match;
+    state.syncOffsetMs = match.matched ? Math.round(match.clipStartRel * 1000) : 0;
     pending.video = pending.gpx = null;
     // reset pickers so re-selecting the same filename fires 'change' again
     $("videoInput").value = "";
@@ -14122,6 +14410,7 @@ function renderAll() {
   renderStage();
   renderWidgetList();
   renderAppt();
+  positionSegWindow();
 }
 
 window.addEventListener("DOMContentLoaded", () => {
@@ -14133,6 +14422,19 @@ window.addEventListener("DOMContentLoaded", () => {
   // Selection-governed pinch: second finger may land anywhere on the
   // preview; the selected widget (or the one under the first finger) resizes.
   $("stage").addEventListener("touchstart", dispatchPinch, { passive: false });
+
+  // Ride-profile segment window: created here so it rides the stage but
+  // stays outside the render layers (editor chrome, never exported).
+  const seg = document.createElement("div");
+  seg.id = "segWindow";
+  seg.className = "seg-window hidden";
+  seg.innerHTML = '<canvas class="seg-profile"></canvas><div class="seg-band"></div>';
+  $("stage").appendChild(seg);
+  seg.addEventListener("pointerdown", (e) => {
+    if (e.pointerType === "touch") return;
+    startSegDrag(e);
+  });
+  seg.addEventListener("touchstart", startSegDrag, { passive: false });
 
   // 100% client-side: no auto-load from a server — files come from the
   // pickers / drag-and-drop and stay in this browser.
@@ -14177,6 +14479,9 @@ window.addEventListener("DOMContentLoaded", () => {
   });
   $("syncOffset").addEventListener("input", () => {
     state.syncOffsetMs = parseInt($("syncOffset").value || "0", 10);
+    if (state.match) state.match.clipStartRel = (state.syncOffsetMs || 0) / 1000;
+    renderMatch();
+    positionSegWindow();
     renderStage();
   });
   $("btnRender").addEventListener("click", doRender);
