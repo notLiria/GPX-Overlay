@@ -499,7 +499,10 @@ function renderStage() {
       rz.style.left = (w.x + w.w) * scale - 6 + "px";
       rz.style.top = (w.y + w.h) * scale - 6 + "px";
       if (!w.display) rz.style.display = "none";
-      rz.addEventListener("pointerdown", (e) => startResize(e, w, cv));
+      cv.addEventListener("pointerdown", (e) => {
+        if (inResizeZone(e, cv)) startResize(e, w, cv);
+        else startDrag(e, w, cv);
+      });
       stage.appendChild(rz);
       continue;
     }
@@ -519,8 +522,13 @@ function renderStage() {
     const rz = document.createElement("div");
     rz.className = "resize";
     box.appendChild(rz);
-    box.addEventListener("pointerdown", (e) => startDrag(e, w, box));
-    rz.addEventListener("pointerdown", (e) => startResize(e, w, box));
+    box.addEventListener("pointerdown", (e) => {
+      // Gesture routing: the bottom-right corner zone resizes, everything
+      // else drags. A separate hit target fails on small widgets (its
+      // 44px touch area swallows the whole box — audit 2026-10-14).
+      if (inResizeZone(e, box)) startResize(e, w, box);
+      else startDrag(e, w, box);
+    });
     stage.appendChild(box);
   }
 }
@@ -649,11 +657,23 @@ function borderOn(ctx, cv, w) {
 }
 
 /* ---------------------------------------------------------- drag & resize */
+function inResizeZone(e, box) {
+  const r = box.getBoundingClientRect();
+  const zone = Math.max(22, Math.min(44, r.width * 0.38, r.height * 0.5));
+  return (r.right - e.clientX) <= zone && (r.bottom - e.clientY) <= zone;
+}
+
 function startDrag(e, w, box) {
+  if (e.pointerType === "mouse" && e.button !== 0) return;
   e.preventDefault();
   selectWidget(w.id);
   const scale = stageScale();
   const sx = e.clientX, sy = e.clientY, ox = w.x, oy = w.y;
+  const pid = e.pointerId;
+  // Pointer capture keeps touch drags alive past the element edge; the
+  // cancel/lostcapture paths guarantee listeners never leak when iOS
+  // interrupts a gesture (audit 2026-10-14: drag state must clear on cancel).
+  try { e.target.setPointerCapture(pid); } catch (err) {}
   const move = (ev) => {
     w.x = snap(ox + (ev.clientX - sx) / scale);
     w.y = snap(oy + (ev.clientY - sy) / scale);
@@ -667,16 +687,24 @@ function startDrag(e, w, box) {
   const up = () => {
     window.removeEventListener("pointermove", move);
     window.removeEventListener("pointerup", up);
+    window.removeEventListener("pointercancel", up);
+    window.removeEventListener("lostpointercapture", up);
+    try { e.target.releasePointerCapture(pid); } catch (err) {}
     renderAll();
   };
   window.addEventListener("pointermove", move);
   window.addEventListener("pointerup", up);
+  window.addEventListener("pointercancel", up);
+  window.addEventListener("lostpointercapture", up);
 }
 function startResize(e, w, box) {
+  if (e.pointerType === "mouse" && e.button !== 0) return;
   e.preventDefault(); e.stopPropagation();
   selectWidget(w.id);
   const scale = stageScale();
   const sx = e.clientX, sy = e.clientY, ow = w.w, oh = w.h;
+  const pid = e.pointerId;
+  try { e.target.setPointerCapture(pid); } catch (err) {}
   const move = (ev) => {
     w.w = Math.max(60, snap(ow + (ev.clientX - sx) / scale));
     w.h = Math.max(40, snap(oh + (ev.clientY - sy) / scale));
@@ -687,10 +715,15 @@ function startResize(e, w, box) {
   const up = () => {
     window.removeEventListener("pointermove", move);
     window.removeEventListener("pointerup", up);
+    window.removeEventListener("pointercancel", up);
+    window.removeEventListener("lostpointercapture", up);
+    try { e.target.releasePointerCapture(pid); } catch (err) {}
     renderAll();
   };
   window.addEventListener("pointermove", move);
   window.addEventListener("pointerup", up);
+  window.addEventListener("pointercancel", up);
+  window.addEventListener("lostpointercapture", up);
 }
 const snap = (v) => Math.round(v / 10) * 10;
 

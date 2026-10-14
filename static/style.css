@@ -213,3 +213,102 @@ input[type="range"] { width: 100%; accent-color: var(--accent2); }
   padding: 9px 15px; z-index: 50; max-width: 80vw;
 }
 .hidden { display: none !important; }
+
+/* ============================================================
+   UI polish pass — impeccable-style audit 2026-10-14
+   (real detector run + craft floor: contrast, type floor, touch
+   targets, iOS drag surfaces, browser-surface theming)
+   ============================================================ */
+
+/* Typography: Inter carries the UI (was falling back to Arial) */
+body {
+  font-family: "Inter", -apple-system, "Segoe UI", Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Type floor: no functional text below 12px (was 11px) */
+.panel h2 { font-size: 12px; letter-spacing: 1px; }
+p, .hint, .status { font-size: 13px; }
+
+/* Contrast: dark text on the orange accent (white measured 2.84:1,
+   detector low-contrast; dark measures ~6.6:1) */
+button.primary { color: #20120a; }
+
+/* One visible focus ring everywhere */
+:focus-visible {
+  outline: 2px solid var(--accent2, var(--accent));
+  outline-offset: 2px;
+}
+
+/* iOS/touch drag surfaces: keep the gesture on the widget, not the page */
+#stage, .wbox, .resize, .preview-wrap {
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+input, textarea { -webkit-user-select: text; user-select: text; }
+
+/* Coarse pointers (phones): 44px targets and grabbable handles */
+@media (pointer: coarse) {
+  button, select, .file-btn,
+  input.tiny, input[type="number"], input[type="text"] {
+    min-height: 44px;
+    font-size: 15px;
+  }
+  .resize { width: 22px; height: 22px; }
+  .resize::after { content: ""; position: absolute; inset: -12px; }
+  input[type="range"] { height: 44px; }
+  .widget-row button, .widget-row input { min-width: 44px; min-height: 44px; }
+}
+
+/* Safe areas: nothing under the notch or home indicator */
+header, .panel, .timeline-row, .action-row, .status {
+  padding-left: max(12px, env(safe-area-inset-left));
+  padding-right: max(12px, env(safe-area-inset-right));
+}
+body { padding-bottom: env(safe-area-inset-bottom); }
+
+/* Browser surfaces carry the design too */
+::selection { background: var(--accent); color: #20120a; }
+* { scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+.mono, .status, input[type="number"] { font-variant-numeric: tabular-nums; }
+
+/* Reduced motion: drop decorative motion, keep state feedback */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* The true-frame canvas is a pure visual overlay: interaction always
+   lands on the DOM layer beneath it. Without this the canvas swallows
+   the FIRST touch and iOS drags need a dead starter tap (audit
+   2026-10-14, synthesized-touch evidence). */
+#trueFrame { pointer-events: none; }
+
+/* Remaining coarse-target gaps found in the touch round */
+@media (pointer: coarse) {
+  .resize::after { inset: -16px; }          /* 12px handle -> 44px hit */
+  #widgetList button { min-width: 44px; min-height: 44px; }
+  #widgetList input[type="checkbox"] { width: 26px; height: 26px; }
+  #btnBack, #btnFwd { min-width: 44px; }
+}
+
+/* Resize handle is a visual affordance only — gesture routing lives in
+   JS (inResizeZone) so tiny widgets can't be swallowed by it */
+.wbox .resize, .resize { pointer-events: none; }
+
+/* Mobile polish from the iPhone viewport round: toast clear of the
+   transport, and the action row never clips at the right edge */
+.toast { bottom: max(84px, calc(env(safe-area-inset-bottom) + 84px)); }
+.action-row { flex-wrap: wrap; max-width: 100%; }
+.action-row > * { max-width: 100%; }
+@media (pointer: coarse) {
+  .action-row select, .action-row button { flex: 1 1 auto; }
+}
