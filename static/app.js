@@ -227,23 +227,22 @@ const PRESETS = {
     ];
   },
   racetelem() {
+    // Default preset (Liria 2026-10-14): grade delta top-left,
+    // HR shift bar top-right, speed tach sweep center-bottom.
     const W = vid().w, H = vid().h, k = W / 720;
     return [
-      widget("speed", {
-        x: Math.round(W / 2 - 220 * k), y: 24, w: 440 * k, h: 150 * k,
-        style: "ledbar", label: "SPEED", unit: "kph", font_family: "Rajdhani",
-      }),
       widget("grade", {
-        x: 20, y: 220, w: 330 * k, h: 150 * k, style: "delta",
+        x: 20, y: 30, w: 330 * k, h: 150 * k, style: "delta",
         label: "GRADE", unit: "percent", font_family: "Rajdhani",
       }),
       widget("heartrate", {
-        x: W - 350 * k - 20, y: 220, w: 350 * k, h: 150 * k,
-        style: "trace", label: "HR", unit: "bpm", font_family: "Inter",
+        x: W - 350 * k - 20, y: 30, w: 350 * k, h: 150 * k,
+        style: "ledbar", label: "HR", unit: "bpm", font_family: "Rajdhani",
       }),
-      widget("cadence", {
-        x: 20, y: H - 280 * k - 40, w: 280 * k, h: 280 * k,
-        style: "gearbox", label: "RPM", font_family: "DSEG7", show_icon: false,
+      widget("speed", {
+        x: Math.round(W / 2 - 160 * k), y: H - 330 * k, w: 320 * k, h: 320 * k,
+        style: "tach", label: "SPEED", unit: "kph",
+        font_family: "Rajdhani", show_icon: false,
       }),
     ];
   },
@@ -505,6 +504,12 @@ function renderStage() {
         else startDrag(e, w, cv);
       });
       cv.addEventListener("touchstart", (e) => {
+        if (e.touches && e.touches.length === 2) {
+          const g = (gestureWidget && gestureWidget.box.isConnected) ? gestureWidget : { w, box: cv };
+          startPinch(e, g.w, g.box);
+          return;
+        }
+        if (e.touches && e.touches.length > 2) return;
         if (inResizeZone(e, cv)) startResize(e, w, cv);
         else startDrag(e, w, cv);
       }, { passive: false });
@@ -531,6 +536,13 @@ function renderStage() {
     // else drags. A separate hit target fails on small widgets (its
     // 44px touch area swallows the whole box — audit 2026-10-14).
     const down = (e) => {
+      // Two fingers = pinch, always on the widget the first finger grabbed
+      if (e.touches && e.touches.length === 2) {
+        const g = (gestureWidget && gestureWidget.box.isConnected) ? gestureWidget : { w, box };
+        startPinch(e, g.w, g.box);
+        return;
+      }
+      if (e.touches && e.touches.length > 2) return;
       if (inResizeZone(e, box)) startResize(e, w, box);
       else startDrag(e, w, box);
     };
@@ -711,6 +723,53 @@ function bindGesture(endEl, move, up) {
   };
 }
 
+/* One gesture at a time: a second finger mid-drag hands off to pinch.
+ * cancel() unbinds WITHOUT a re-render — the gesture target must stay
+ * alive for iOS (the same trap as renderStage mid-gesture). */
+let activeGesture = null;
+let gestureWidget = null;   // { w, box } — pinch continues the drag's widget
+function setGesture(g) {
+  if (activeGesture && activeGesture.cancel) activeGesture.cancel();
+  activeGesture = g;
+}
+
+function startPinch(e, w, box) {
+  e.preventDefault();
+  selectWidgetNoStage(w.id, box);
+  const scale = stageScale();
+  const [a, b] = [e.touches[0], e.touches[1]];
+  const d0 = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY) || 1;
+  const ow = w.w, oh = w.h;
+  const move = (ev) => {
+    if (ev.cancelable) ev.preventDefault();
+    if (!ev.touches || ev.touches.length < 2) return;   // one finger lifts
+    const [p, q] = [ev.touches[0], ev.touches[1]];
+    const f = Math.hypot(p.clientX - q.clientX, p.clientY - q.clientY) / d0;
+    w.w = Math.max(60, Math.min(4000, snap(ow * f)));
+    w.h = Math.max(40, Math.min(4000, snap(oh * f)));
+    box.style.width = w.w * scale + "px";
+    box.style.height = w.h * scale + "px";
+    updatePosFields(w);
+  };
+  let done = false;
+  const unbind = () => {
+    window.removeEventListener("touchmove", move);
+    window.removeEventListener("touchend", up);
+    window.removeEventListener("touchcancel", up);
+  };
+  const up = () => {
+    if (done) return;
+    done = true;
+    unbind();
+    activeGesture = null;
+    renderAll();
+  };
+  window.addEventListener("touchmove", move, { passive: false });
+  window.addEventListener("touchend", up);
+  window.addEventListener("touchcancel", up);
+  setGesture({ cancel: () => { done = true; unbind(); } });
+}
+
 function startDrag(e, w, box) {
   if (e.pointerType === "mouse" && e.button !== 0) return;
   e.preventDefault();
@@ -732,10 +791,13 @@ function startDrag(e, w, box) {
   };
   let done = false;
   const unbind = bindGesture(window, move, up);
+  gestureWidget = { w, box };
+  setGesture({ cancel: () => { done = true; unbind(); } });
   function up() {
     if (done) return;
     done = true;
     unbind();
+    activeGesture = null;
     renderAll();
   }
 }
@@ -757,10 +819,13 @@ function startResize(e, w, box) {
   };
   let done = false;
   const unbind = bindGesture(window, move, up);
+  gestureWidget = { w, box };
+  setGesture({ cancel: () => { done = true; unbind(); } });
   function up() {
     if (done) return;
     done = true;
     unbind();
+    activeGesture = null;
     renderAll();
   }
 }
@@ -1278,7 +1343,7 @@ function renderAll() {
 }
 
 window.addEventListener("DOMContentLoaded", () => {
-  state.widgets = PRESETS.gpxoverlay();
+  state.widgets = PRESETS[$("presetSelect").value]();
   fitStage();
   renderAll();
   wireDropZone();
