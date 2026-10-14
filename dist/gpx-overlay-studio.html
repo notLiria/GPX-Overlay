@@ -13243,18 +13243,14 @@ function renderStage() {
       rz.style.left = (w.x + w.w) * scale - 6 + "px";
       rz.style.top = (w.y + w.h) * scale - 6 + "px";
       if (!w.display) rz.style.display = "none";
+      cv.dataset.wid = w.id;
       cv.addEventListener("pointerdown", (e) => {
         if (e.pointerType === "touch") return;   // touch uses touchstart below
         if (inResizeZone(e, cv)) startResize(e, w, cv);
         else startDrag(e, w, cv);
       });
       cv.addEventListener("touchstart", (e) => {
-        if (e.touches && e.touches.length === 2) {
-          const g = (gestureWidget && gestureWidget.box.isConnected) ? gestureWidget : { w, box: cv };
-          startPinch(e, g.w, g.box);
-          return;
-        }
-        if (e.touches && e.touches.length > 2) return;
+        if (e.touches && e.touches.length > 1) return;  // pinch: stage-level
         if (inResizeZone(e, cv)) startResize(e, w, cv);
         else startDrag(e, w, cv);
       }, { passive: false });
@@ -13277,17 +13273,12 @@ function renderStage() {
     const rz = document.createElement("div");
     rz.className = "resize";
     box.appendChild(rz);
+    box.dataset.wid = w.id;
     // Gesture routing: the bottom-right corner zone resizes, everything
     // else drags. A separate hit target fails on small widgets (its
     // 44px touch area swallows the whole box — audit 2026-10-14).
     const down = (e) => {
-      // Two fingers = pinch, always on the widget the first finger grabbed
-      if (e.touches && e.touches.length === 2) {
-        const g = (gestureWidget && gestureWidget.box.isConnected) ? gestureWidget : { w, box };
-        startPinch(e, g.w, g.box);
-        return;
-      }
-      if (e.touches && e.touches.length > 2) return;
+      if (e.touches && e.touches.length > 1) return;  // pinch: stage-level
       if (inResizeZone(e, box)) startResize(e, w, box);
       else startDrag(e, w, box);
     };
@@ -13447,6 +13438,40 @@ function gesturePoint(ev) {
   return ev.touches && ev.touches.length ? ev.touches[0]
        : ev.changedTouches && ev.changedTouches.length ? ev.changedTouches[0]
        : ev;
+}
+
+function widgetForBoxEl(boxEl) {
+  return state.widgets.find(x => x.id === boxEl.dataset.wid) || null;
+}
+
+function selectedWidgetAndBox() {
+  const w = state.widgets.find(x => x.id === state.selected);
+  if (!w) return null;
+  const box = document.querySelector(
+    ".wbox.selected, .special-canvas.selected-canvas");
+  return box ? { w, box } : null;
+}
+
+/* Selection-governed pinch (Liria 2026-10-15): tap a widget to select it,
+ * it stays selected, then pinch ANYWHERE on the preview to resize it. The
+ * second finger no longer has to hit the widget — requiring both fingers
+ * on a small target made recognition flaky. A two-finger grab that starts
+ * directly on a widget still targets that widget. */
+function dispatchPinch(e) {
+  if (!e.touches || e.touches.length < 2) return;
+  const t0 = e.touches[0];
+  const el = document.elementFromPoint(t0.clientX, t0.clientY);
+  const boxEl = el && el.closest ? el.closest(".wbox, .special-canvas") : null;
+  let target = null;
+  if (boxEl) {
+    const w = widgetForBoxEl(boxEl);
+    if (w) target = { w, box: boxEl };
+  }
+  if (!target) target = selectedWidgetAndBox();
+  if (!target) return;
+  e.preventDefault();
+  if (target.w.id !== state.selected) selectWidgetNoStage(target.w.id, target.box);
+  startPinch(e, target.w, target.box);
 }
 
 function bindGesture(endEl, move, up) {
@@ -14092,6 +14117,10 @@ window.addEventListener("DOMContentLoaded", () => {
   fitStage();
   renderAll();
   wireDropZone();
+
+  // Selection-governed pinch: second finger may land anywhere on the
+  // preview; the selected widget (or the one under the first finger) resizes.
+  $("stage").addEventListener("touchstart", dispatchPinch, { passive: false });
 
   // 100% client-side: no auto-load from a server — files come from the
   // pickers / drag-and-drop and stay in this browser.
