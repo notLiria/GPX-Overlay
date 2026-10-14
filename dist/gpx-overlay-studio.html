@@ -11494,6 +11494,49 @@ const Capture = (() => {
     ctx.shadowOffsetY = 0;
   }
 
+  /* Ink-true text: measure the actual glyph pixels (not advance width —
+   * DSEG7's bearings skew 3-digit values off-center), center on ink, shrink
+   * to fit maxW, and outline for contrast over bright video (review
+   * 2026-10-14: impeccable-style P0 centering + P1 contrast). */
+  function textInk(ctx, txt) {
+    const m = ctx.measureText(txt);
+    return {
+      l: m.actualBoundingBoxLeft, r: m.actualBoundingBoxRight,
+      w: m.actualBoundingBoxLeft + m.actualBoundingBoxRight,
+    };
+  }
+
+  function ctext(ctx, txt, x, cy, weight, px, fam, fill, opts = {}) {
+    const o = Object.assign(
+      { maxW: 0, align: "center", outline: 0.13, shadow: true }, opts);
+    let size = px;
+    ctx.textAlign = "left";
+    ctx.textBaseline = "middle";
+    ctx.font = `${weight} ${Math.round(size)}px ${fam}`;
+    let m = textInk(ctx, txt);
+    if (o.maxW > 0) {
+      while (size > 6 && m.w > o.maxW) {
+        size *= 0.94;
+        ctx.font = `${weight} ${Math.round(size)}px ${fam}`;
+        m = textInk(ctx, txt);
+      }
+    }
+    const x0 = o.align === "left" ? x + m.l
+      : o.align === "right" ? x - m.r
+      : x + m.l - m.w / 2;
+    if (o.shadow) shadowOn(ctx, Math.max(5, size * 0.24));
+    if (o.outline > 0) {
+      ctx.lineWidth = Math.max(1.5, size * o.outline);
+      ctx.strokeStyle = "rgba(8,10,14,0.88)";
+      ctx.lineJoin = "round";
+      ctx.strokeText(txt, x0, cy);
+    }
+    ctx.fillStyle = fill;
+    ctx.fillText(txt, x0, cy);
+    shadowOff(ctx);
+    return size;
+  }
+
   const PAINTERS = {
     /* Forza-style tachometer sweep with zone colors */
     tach(ctx, o) {
@@ -11524,28 +11567,21 @@ const Capture = (() => {
       ctx.arc(cx + Math.cos(ar) * (r + lw * 0.95),
               cy + Math.sin(ar) * (r + lw * 0.95), lw * 0.22, 0, 7);
       ctx.fill();
-      ctx.textAlign = "center"; ctx.textBaseline = "middle";
-      ctx.fillStyle = "#fff";
-      ctx.font = `600 ${Math.round(r * 0.58)}px Rajdhani`;
-      ctx.fillText(o.value, cx, cy - r * 0.02);
-      ctx.font = `600 ${Math.round(r * 0.17)}px Rajdhani`;
-      ctx.fillStyle = "rgba(255,255,255,0.8)";
-      ctx.fillText(o.unit, cx, cy + r * 0.34);
-      ctx.font = `600 ${Math.round(r * 0.15)}px Rajdhani`;
-      ctx.fillStyle = "rgba(255,255,255,0.55)";
-      ctx.fillText(o.label, cx, cy - r * 0.52);
       shadowOff(ctx);
+      ctext(ctx, o.value, cx, cy - r * 0.02, "600", r * 0.58, "Rajdhani",
+            "#fff", { maxW: r * 1.35 });
+      ctext(ctx, o.unit, cx, cy + r * 0.34, "600", r * 0.17, "Rajdhani",
+            "rgba(255,255,255,0.85)", { maxW: r * 1.1 });
+      ctext(ctx, o.label, cx, cy - r * 0.52, "600", r * 0.15, "Rajdhani",
+            "rgba(255,255,255,0.75)", { maxW: r * 1.2 });
     },
 
     /* F1/Forza LED shift-light strip */
     ledbar(ctx, o) {
       const pad = o.w * 0.07;
-      shadowOn(ctx, 5);
-      ctx.textAlign = "left"; ctx.textBaseline = "middle";
-      ctx.font = `600 ${Math.round(o.h * 0.11)}px Rajdhani`;
-      ctx.fillStyle = "rgba(255,255,255,0.6)";
-      ctx.fillText(o.label, pad, o.y + o.h * 0.16);
-      shadowOff(ctx);
+      ctext(ctx, o.label, pad, o.y + o.h * 0.16, "600", o.h * 0.11, "Rajdhani",
+            "rgba(255,255,255,0.75)",
+            { align: "left", maxW: o.w * 0.6 });
       const N = 16, gap = o.w * 0.008;
       const segW = (o.w - pad * 2 - (N - 1) * gap) / N;
       const by = o.y + o.h * 0.38, bh = o.h * 0.20;
@@ -11563,15 +11599,15 @@ const Capture = (() => {
           ctx.fill();
         }
       }
-      shadowOn(ctx, 8);
-      ctx.textAlign = "left"; ctx.textBaseline = "middle";
-      ctx.font = `600 ${Math.round(o.h * 0.30)}px Rajdhani`;
-      ctx.fillStyle = "#fff";
-      ctx.fillText(o.value, pad, o.y + o.h * 0.78);
-      ctx.font = `600 ${Math.round(o.h * 0.11)}px Rajdhani`;
-      ctx.fillStyle = "rgba(255,255,255,0.7)";
-      ctx.fillText(o.unit, pad + ctx.measureText(o.value).width + o.h * 0.22, o.y + o.h * 0.80);
-      shadowOff(ctx);
+      // value + unit share ONE face and ONE size (review 2026-10-13), drawn
+      // with ink-true metrics (review 2026-10-14)
+      const vs = ctext(ctx, o.value, pad, o.y + o.h * 0.78, "600", o.h * 0.30,
+                       "Rajdhani", "#fff", { align: "left", maxW: o.w * 0.5 });
+      ctx.font = `600 ${Math.round(vs)}px Rajdhani`;
+      const vw = textInk(ctx, o.value).w;
+      ctext(ctx, o.unit, pad + vw + o.h * 0.10, o.y + o.h * 0.80, "600",
+            o.h * 0.11, "Rajdhani", "rgba(255,255,255,0.85)",
+            { align: "left", maxW: o.w * 0.35 });
     },
 
     /* Gear-indicator cube with 7-segment digits */
@@ -11598,30 +11634,23 @@ const Capture = (() => {
       ctx.strokeStyle = "rgba(255,255,255,0.85)";
       ctx.lineWidth = Math.max(1.5, o.h * 0.01);
       ctx.stroke();
-      ctx.textAlign = "center"; ctx.textBaseline = "middle";
-      ctx.font = `600 ${Math.round(ch * 0.58)}px Rajdhani`;
-      ctx.fillStyle = "rgba(255,255,255,0.9)";
-      ctx.fillText(o.label, bx + bw / 2, by + 1);
-      // giant value in 7-segment face
-      shadowOn(ctx, 10);
-      ctx.fillStyle = "#fff";
-      ctx.font = `${Math.round(bh * 0.52)}px DSEG7`;
-      ctx.fillText(o.value, bx + bw / 2, by + bh * 0.47);
-      shadowOff(ctx);
+      ctext(ctx, o.label, bx + bw / 2, by + 1, "600", ch * 0.58, "Rajdhani",
+            "rgba(255,255,255,0.95)",
+            { maxW: cw * 0.85, outline: 0, shadow: false });
+      // giant value in 7-segment face — ink-centered and fit-to-box
+      // (review 2026-10-14: 3-digit values overflowed and skewed right,
+      // because advance-width centering fights DSEG7's bearings)
+      ctext(ctx, o.value, bx + bw / 2, by + bh * 0.47, "400", bh * 0.52,
+            "DSEG7", "#fff", { maxW: bw * 0.80, outline: 0.10 });
     },
 
     /* Racing delta bar, center-zero, green positive / red negative */
     delta(ctx, o) {
       const pad = o.w * 0.10;
-      shadowOn(ctx, 6);
-      ctx.textAlign = "center"; ctx.textBaseline = "middle";
-      ctx.font = `600 ${Math.round(o.h * 0.11)}px Rajdhani`;
-      ctx.fillStyle = "rgba(255,255,255,0.55)";
-      ctx.fillText(o.label, o.x + o.w / 2, o.y + o.h * 0.16);
-      ctx.font = `600 ${Math.round(o.h * 0.30)}px Rajdhani`;
-      ctx.fillStyle = "#fff";
-      ctx.fillText(o.value, o.x + o.w / 2, o.y + o.h * 0.42);
-      shadowOff(ctx);
+      ctext(ctx, o.label, o.x + o.w / 2, o.y + o.h * 0.16, "600", o.h * 0.11,
+            "Rajdhani", "rgba(255,255,255,0.75)", { maxW: o.w * 0.7 });
+      ctext(ctx, o.value, o.x + o.w / 2, o.y + o.h * 0.42, "600", o.h * 0.30,
+            "Rajdhani", "#fff", { maxW: o.w * 0.8 });
       const bx = pad, bw = o.w - pad * 2;
       const by = o.y + o.h * 0.62, bh = o.h * 0.11;
       rr2(ctx, bx, by, bw, bh, bh / 2);
@@ -11644,29 +11673,23 @@ const Capture = (() => {
       ctx.fillRect(bx, by - bh * 0.25, 3, bh * 1.5);
       ctx.fillRect(bx + bw - 3, by - bh * 0.25, 3, bh * 1.5);
       ctx.font = `600 ${Math.round(o.h * 0.085)}px Rajdhani`;
-      ctx.fillStyle = "rgba(255,255,255,0.5)";
-      ctx.textAlign = "left";
-      ctx.fillText(o.unit, bx, by + bh * 2.1);
-      ctx.textAlign = "right";
-      ctx.fillText("max", bx + bw, by + bh * 2.1);
+      ctext(ctx, o.unit, bx, by + bh * 2.1, "600", o.h * 0.085, "Rajdhani",
+            "rgba(255,255,255,0.7)", { align: "left", maxW: o.w * 0.3 });
+      ctext(ctx, "max", bx + bw, by + bh * 2.1, "600", o.h * 0.085, "Rajdhani",
+            "rgba(255,255,255,0.7)", { align: "right", maxW: o.w * 0.2 });
     },
 
     /* Telemetry sparkline with live dot */
     trace(ctx, o) {
       const pad = o.w * 0.07;
-      shadowOn(ctx, 5);
-      ctx.textAlign = "left"; ctx.textBaseline = "middle";
-      ctx.font = `600 ${Math.round(o.h * 0.11)}px Inter`;
-      ctx.fillStyle = "rgba(255,255,255,0.6)";
-      ctx.fillText(o.label, pad, o.y + o.h * 0.14);
-      ctx.textAlign = "right";
-      ctx.font = `600 ${Math.round(o.h * 0.22)}px Inter`;
-      ctx.fillStyle = "#fff";
-      ctx.fillText(o.value, o.w - pad, o.y + o.h * 0.14);
-      ctx.font = `500 ${Math.round(o.h * 0.09)}px Inter`;
-      ctx.fillStyle = "rgba(255,255,255,0.55)";
-      ctx.fillText(o.unit, o.w - pad, o.y + o.h * 0.28);
-      shadowOff(ctx);
+      ctext(ctx, o.label, o.x + pad, o.y + o.h * 0.14, "600", o.h * 0.11,
+            "Inter", "rgba(255,255,255,0.75)",
+            { align: "left", maxW: o.w * 0.5 });
+      ctext(ctx, o.value, o.x + o.w - pad, o.y + o.h * 0.14, "600", o.h * 0.22,
+            "Inter", "#fff", { align: "right", maxW: o.w * 0.5 });
+      ctext(ctx, o.unit, o.x + o.w - pad, o.y + o.h * 0.28, "500", o.h * 0.09,
+            "Inter", "rgba(255,255,255,0.8)",
+            { align: "right", maxW: o.w * 0.3 });
       const gx = pad, gy = o.y + o.h * 0.38, gw = o.w - pad * 2, gh = o.h * 0.46;
       const s = o.series || [];
       ctx.strokeStyle = "rgba(255,255,255,0.18)";
@@ -11721,19 +11744,13 @@ const Capture = (() => {
         ctx.stroke();
         shadowOff(ctx);
       }
-      ctx.textAlign = "center"; ctx.textBaseline = "middle";
-      shadowOn(ctx, 8);
-      ctx.fillStyle = "#fff";
-      ctx.font = `500 ${Math.round(r * 0.50)}px Inter`;
-      ctx.fillText(o.value, cx, cy - r * 0.12);
-      ctx.font = `500 ${Math.round(r * 0.16)}px Inter`;
-      ctx.fillStyle = "rgba(255,255,255,0.7)";
-      ctx.fillText(o.sub || o.unit, cx, cy + r * 0.28);
-      shadowOff(ctx);
+      ctext(ctx, o.value, cx, cy - r * 0.12, "500", r * 0.50, "Inter", "#fff",
+            { maxW: r * 1.15 });
+      ctext(ctx, o.sub || o.unit, cx, cy + r * 0.28, "500", r * 0.16, "Inter",
+            "rgba(255,255,255,0.8)", { maxW: r * 1.3 });
       // label sits in the bottom gap
-      ctx.font = `600 ${Math.round(r * 0.15)}px Inter`;
-      ctx.fillStyle = "rgba(255,255,255,0.6)";
-      ctx.fillText(o.label, cx, cy + r * 1.18);
+      ctext(ctx, o.label, cx, cy + r * 1.18, "600", r * 0.15, "Inter",
+            "rgba(255,255,255,0.75)", { maxW: r * 1.4 });
     },
 
     /* Forza Horizon-style icon pills — symmetric padding (icon left-aligned
@@ -11792,7 +11809,15 @@ const Capture = (() => {
 
   function paintStyle(ctx, style, x, y, w, h, data) {
     const fn = PAINTERS[style];
-    if (fn) fn(ctx, Object.assign({ x, y, w, h }, data));
+    if (fn) {
+      // One coordinate authority: painters work in widget-local space
+      // (review 2026-10-14: ledbar/delta/trace drew at absolute x≈0 while
+      // tach/gearbox/ring used o.x — widgets landed in the wrong place).
+      ctx.save();
+      ctx.translate(x, y);
+      fn(ctx, Object.assign({ x: 0, y: 0, w, h }, data));
+      ctx.restore();
+    }
   }
 
   return { buildOverlayDOM, buildValueDOM, rasterize, captureFrame, paintFrame,

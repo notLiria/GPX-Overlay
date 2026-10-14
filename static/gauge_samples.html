@@ -20,8 +20,8 @@
   <h1 id="title">style</h1>
   <div class="row" id="row"></div>
 </div>
-<script src="/static/model.js?v=5"></script>
-<script src="/static/capture.js?v=5"></script>
+<script src="/static/model.js?v=6"></script>
+<script src="/static/capture.js?v=6"></script>
 <script>
 const CASES = {
   tach: [
@@ -35,9 +35,9 @@ const CASES = {
     { frac: 0.93, value: "112", label: "CADENCE", unit: "rpm" },
   ],
   gearbox: [
-    { frac: 0.12, value: "8",  label: "KPH" },
-    { frac: 0.52, value: "25", label: "KPH" },
-    { frac: 0.95, value: "44", label: "KPH" },
+    { frac: 0.12, value: "8",   label: "HR" },
+    { frac: 0.52, value: "134", label: "HR" },
+    { frac: 0.95, value: "182", label: "HR" },
   ],
   delta: [
     { frac: 0.2,  signed: -0.15, value: "-1.2", label: "GRADE", unit: "%" },
@@ -84,10 +84,15 @@ async function run() {
   await Promise.allSettled(faces.map(f => f.load().then(x => document.fonts.add(x))));
   const style = (new URLSearchParams(location.search).get("s")
                  || (location.hash || "#tach").slice(1));
+  const bright = new URLSearchParams(location.search).get("bg") === "bright";
   const cases = CASES[style] || CASES.tach;
   const [w, h] = SIZES[style] || [380, 380];
   document.getElementById("title").textContent =
     style + " — low / mid / max  ·  rendered by capture.js engine";
+  if (bright) {
+    document.body.style.background = "#f2ead8";
+    document.getElementById("title").style.color = "#6b6355";
+  }
   const row = document.getElementById("row");
   const caps = ["LOW", "MID", "MAX"];
   cases.forEach((c, i) => {
@@ -101,7 +106,16 @@ async function run() {
     cap.textContent = caps[i];
     cell.appendChild(cap);
     row.appendChild(cell);
-    Capture.paintStyle(cv.getContext("2d"), style, 0, 0, w, h, c);
+    const g = cv.getContext("2d");
+    if (bright) {
+      // simulate a bright video background for contrast review
+      const grad = g.createLinearGradient(0, 0, 0, h);
+      grad.addColorStop(0, "#e9e2c8");
+      grad.addColorStop(1, "#c9c2a8");
+      g.fillStyle = grad;
+      g.fillRect(0, 0, w, h);
+    }
+    Capture.paintStyle(g, style, 0, 0, w, h, c);
   });
   window.__ready = true;
 }
