@@ -82,6 +82,7 @@
     refreshFileStatus();
   });
   $("btnAnalyze").addEventListener("click", () => analyze());
+  $("cfSort").addEventListener("change", () => renderCards());
 
   /* ----------------------------------------------------------- analyze */
 
@@ -362,8 +363,16 @@
   function renderCards() {
     const box = $("results");
     box.innerHTML = "";
-    const sorted = [...state.cands].sort((a, b) => (b.finalScore || b.score) - (a.finalScore || a.score));
-    sorted.forEach((c, i) => {
+    /* score rank is stable across orderings — #3 is always the same pick */
+    const scoreSorted = [...state.cands]
+      .sort((a, b) => (b.finalScore || b.score) - (a.finalScore || a.score));
+    scoreSorted.forEach((c, i) => { c.scoreRank = i + 1; });
+    const order = $("cfSort") ? $("cfSort").value : "score";
+    let sorted;
+    if (order === "start") sorted = [...state.cands].sort((a, b) => a.t0 - b.t0);
+    else if (order === "end") sorted = [...state.cands].sort((a, b) => b.t1 - a.t1);
+    else sorted = scoreSorted;
+    sorted.forEach((c) => {
       const card = document.createElement("div");
       card.className = "cf-card";
       const absT = state.tel ? `${fmtClock(c.t0)} – ${fmtClock(c.t1)}` : "";
@@ -372,7 +381,7 @@
       const timeLine = [absT, rideT, vidT, `${fmt(c.t1 - c.t0)} long`].filter(Boolean).join(" · ");
       const thumbs = (c.video && c.video.thumbs || []);
       card.innerHTML = `
-        <h3><span class="cf-rank">#${i + 1}</span> <span class="cf-kind">${c.kind}</span> ${c.title}</h3>
+        <h3><span class="cf-rank" title="score rank">#${c.scoreRank}</span> <span class="cf-kind">${c.kind}</span> ${c.title}</h3>
         <div class="cf-times">${timeLine}</div>
         <div class="cf-meters">
           ${meter("ride signal", c.score)}

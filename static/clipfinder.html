@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>Clip Finder — GPX Overlay Studio</title>
-<link rel="stylesheet" href="/static/style.css?v=20261018">
+<link rel="stylesheet" href="/static/style.css?v=20261018b">
 <style>
   .cf-wrap { max-width: 1100px; margin: 0 auto; padding: 12px 16px 60px; }
   .cf-title { font-size: 20px; font-weight: 700; margin: 10px 0 2px; }
@@ -63,14 +63,24 @@
     <video id="preview" controls playsinline muted></video>
   </div>
 
+  <div class="cf-bar">
+    <span class="hint">order:</span>
+    <select id="cfSort" class="tiny">
+      <option value="score">best first (score)</option>
+      <option value="start">earliest in ride first</option>
+      <option value="end">latest in ride first</option>
+    </select>
+    <span class="hint">badges keep their score rank in every order</span>
+  </div>
+
   <div id="results"></div>
 </div>
 
 <div id="toast" class="toast hidden"></div>
-<script src="/static/vendor/mp4box.js?v=20261018"></script>
-<script src="/static/local.js?v=20261018"></script>
-<script src="/static/clipscan.js?v=20261018"></script>
-<script src="/static/videoscan.js?v=20261018"></script>
-<script src="/static/clipfinder.js?v=20261018"></script>
+<script src="/static/vendor/mp4box.js?v=20261018b"></script>
+<script src="/static/local.js?v=20261018b"></script>
+<script src="/static/clipscan.js?v=20261018b"></script>
+<script src="/static/videoscan.js?v=20261018b"></script>
+<script src="/static/clipfinder.js?v=20261018b"></script>
 </body>
 </html>
