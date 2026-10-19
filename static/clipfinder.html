@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>Clip Finder — GPX Overlay Studio</title>
+<link rel="stylesheet" href="/static/style.css?v=20261018">
+<style>
+  .cf-wrap { max-width: 1100px; margin: 0 auto; padding: 12px 16px 60px; }
+  .cf-title { font-size: 20px; font-weight: 700; margin: 10px 0 2px; }
+  .cf-sub { color: var(--ink-dim, #9aa3b2); font-size: 13px; margin-bottom: 14px; }
+  .cf-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 10px 0; }
+  .cf-progress { height: 6px; background: #232833; border-radius: 4px; overflow: hidden; margin: 8px 0; }
+  .cf-progress > div { height: 100%; width: 0; background: #4da3ff; transition: width .2s; }
+  .cf-status { font-size: 13px; color: var(--ink-dim, #9aa3b2); min-height: 18px; }
+  .cf-summary { font-size: 13px; margin: 6px 0; }
+  .cf-map { width: 100%; max-width: 520px; background: #171b23; border-radius: 10px; margin: 10px 0; }
+  .cf-card { background: var(--panel, #1c212b); border: 1px solid #2a3140; border-radius: 12px;
+             padding: 12px 14px; margin: 10px 0; }
+  .cf-card h3 { margin: 0 0 4px; font-size: 15px; display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+  .cf-rank { background: #2d3648; border-radius: 6px; padding: 1px 7px; font-size: 12px; }
+  .cf-kind { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: #7fb8ff; }
+  .cf-times { font-family: ui-monospace, monospace; font-size: 12.5px; color: var(--ink-dim, #9aa3b2); margin: 2px 0 6px; }
+  .cf-why { margin: 4px 0 8px; padding-left: 18px; }
+  .cf-why li { margin: 3px 0; font-size: 13.5px; line-height: 1.45; }
+  .cf-meters { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12px; color: var(--ink-dim, #9aa3b2); }
+  .cf-meter { display: flex; align-items: center; gap: 6px; }
+  .cf-meter .bar { width: 70px; height: 6px; background: #2a3140; border-radius: 3px; overflow: hidden; }
+  .cf-meter .bar > div { height: 100%; background: #4da3ff; }
+  .cf-thumbs { display: flex; gap: 6px; margin: 8px 0 4px; }
+  .cf-thumbs canvas { height: 64px; border-radius: 6px; background: #10141c; }
+  .cf-preview-wrap { margin: 12px 0; }
+  .cf-preview-wrap video { width: 100%; max-width: 520px; border-radius: 10px; background: #000; }
+  .cf-note { font-size: 12px; color: var(--ink-dim, #9aa3b2); font-style: italic; }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand"><a href="/static/index.html" style="color:inherit;text-decoration:none">◈ GPX Overlay Studio</a></div>
+  <div class="files">
+    <label class="file-btn">📍 gpx (optional)<input type="file" id="gpxInput" accept=".gpx,.tcx,application/gpx+xml,application/tcx+xml,application/xml,text/xml,application/octet-stream"></label>
+    <label class="file-btn">🎞 video (optional)<input type="file" id="videoInput" accept="video/*,.mov,.mp4,application/octet-stream"></label>
+    <button id="btnAnalyze" class="primary">✂ find clips</button>
+    <button id="btnClear" class="ghost">✕ clear</button>
+  </div>
+  <div class="status" id="fileStatus">no files loaded — GPX alone works; add video for footage evaluation</div>
+</header>
+
+<div class="cf-wrap">
+  <div class="cf-title">✂ Clip Finder</div>
+  <div class="cf-sub">Finds clip candidates in a ride: GPX gives the story (climbs, descents, surges,
+    stops, views), video adds shot boundaries, footage quality and visual uniqueness. Files stay on
+    this device — nothing is uploaded.</div>
+
+  <div id="syncNote" class="cf-note hidden"></div>
+  <div id="rideSummary" class="cf-summary"></div>
+  <canvas id="routeMap" class="cf-map hidden" width="1040" height="440"></canvas>
+
+  <div class="cf-progress hidden" id="progress"><div id="progressFill"></div></div>
+  <div class="cf-status" id="status"></div>
+
+  <div id="previewWrap" class="cf-preview-wrap hidden">
+    <video id="preview" controls playsinline muted></video>
+  </div>
+
+  <div id="results"></div>
+</div>
+
+<div id="toast" class="toast hidden"></div>
+<script src="/static/vendor/mp4box.js?v=20261018"></script>
+<script src="/static/local.js?v=20261018"></script>
+<script src="/static/clipscan.js?v=20261018"></script>
+<script src="/static/videoscan.js?v=20261018"></script>
+<script src="/static/clipfinder.js?v=20261018"></script>
+</body>
+</html>
