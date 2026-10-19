@@ -35,6 +35,21 @@
   }
   const fmt = ClipScan.fmtTime;
 
+  /* absolute wall-clock for a ride-relative time, in the VIEWER's browser
+   * timezone (GPX timestamps are absolute — t0 is unix seconds) */
+  function fmtClock(relSec) {
+    if (!state.tel) return "";
+    return new Date((state.tel.t0 + relSec) * 1000)
+      .toLocaleTimeString([], { hour: "numeric", minute: "2-digit", second: "2-digit" });
+  }
+
+  function fmtRel(sec) {
+    const s = Math.max(0, Math.round(sec));
+    return Math.floor(s / 3600) + ":" +
+      String(Math.floor((s % 3600) / 60)).padStart(2, "0") + ":" +
+      String(s % 60).padStart(2, "0");
+  }
+
   /* ------------------------------------------------------ file pickers */
 
   function refreshFileStatus() {
@@ -111,9 +126,10 @@
           if (state.match.matched) {
             state.vidAligned = true;
             state.vidOffset = state.match.clipStartRel;
-            const at = ClipScan.fmtTime(state.match.clipStartRel);
             note.textContent = `video ↔ ride matched via ${state.match.method} (${state.match.confidence} confidence) — `
-              + `this clip covers ${at}–${ClipScan.fmtTime(state.match.clipStartRel + (state.probe.duration || 0))} of the ride.`
+              + `this clip covers ${fmtClock(state.match.clipStartRel)}–`
+              + `${fmtClock(state.match.clipStartRel + (state.probe.duration || 0))} of the ride`
+              + ` (t+${fmtRel(state.match.clipStartRel)}).`
               + (state.match.note ? " " + state.match.note : "");
           } else {
             note.textContent = "could not place the video on the ride timeline — assuming the video starts at the ride start (adjust later with the sync offset).";
@@ -297,7 +313,7 @@
     $("rideSummary").innerHTML =
       `<b>Ride:</b> ${(s.dist / 1000).toFixed(1)} km · ${fmt(s.duration)} moving · `
       + `+${Math.round(s.gain)} m climbing · avg ${(s.avgSpeed * 3.6).toFixed(1)} km/h · `
-      + `max ${(s.maxSpeed * 3.6).toFixed(1)} km/h`;
+      + `max ${(s.maxSpeed * 3.6).toFixed(1)} km/h · started ${fmtClock(0)}`;
   }
 
   function renderMap() {
@@ -350,12 +366,14 @@
     sorted.forEach((c, i) => {
       const card = document.createElement("div");
       card.className = "cf-card";
-      const rideT = `ride ${fmt(c.t0)}–${fmt(c.t1)}`;
-      const vidT = c.video ? ` · video ${fmt(c.video.v0)}–${fmt(c.video.v1)}` : "";
+      const absT = state.tel ? `${fmtClock(c.t0)} – ${fmtClock(c.t1)}` : "";
+      const rideT = state.tel ? `ride t+${fmtRel(c.t0)}` : "";
+      const vidT = c.video ? `video ${fmt(c.video.v0)}–${fmt(c.video.v1)}` : "";
+      const timeLine = [absT, rideT, vidT, `${fmt(c.t1 - c.t0)} long`].filter(Boolean).join(" · ");
       const thumbs = (c.video && c.video.thumbs || []);
       card.innerHTML = `
         <h3><span class="cf-rank">#${i + 1}</span> <span class="cf-kind">${c.kind}</span> ${c.title}</h3>
-        <div class="cf-times">${rideT}${vidT} · ${fmt(c.t1 - c.t0)} long</div>
+        <div class="cf-times">${timeLine}</div>
         <div class="cf-meters">
           ${meter("ride signal", c.score)}
           ${c.video ? meter("footage", c.video.footage) : ""}
